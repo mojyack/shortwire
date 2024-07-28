@@ -68,7 +68,7 @@ auto Session::on_packet_received(std::span<const std::byte> payload) -> bool {
 
 auto Session::start(const bool is_server) -> bool {
     const auto local_addr = is_server ? to_inet_addr(192, 168, 2, 1) : to_inet_addr(192, 168, 2, 2);
-    unwrap_ob(dev, setup_tap_dev(local_addr));
+    unwrap_ob(dev, setup_tap_dev(local_addr, 1500));
     this->dev = FileDescriptor(dev);
 
     assert_b(p2p::plink::PeerLinkerSession::start({

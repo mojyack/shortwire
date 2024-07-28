@@ -43,7 +43,7 @@ loop:
 }
 
 auto run_server(const uint16_t port) -> bool {
-    unwrap_ob(dev, setup_tap_dev(to_inet_addr(192, 168, 2, 1)));
+    unwrap_ob(dev, setup_tap_dev(to_inet_addr(192, 168, 2, 1), 1518));
     const auto auto_dev = FileDescriptor(dev);
 
     auto sock = FileDescriptor(socket(AF_INET, SOCK_STREAM, 0));
@@ -72,7 +72,7 @@ auto run_server(const uint16_t port) -> bool {
 }
 
 auto run_client(const uint32_t address, const uint16_t port) -> bool {
-    unwrap_ob(dev, setup_tap_dev(to_inet_addr(192, 168, 2, 2)));
+    unwrap_ob(dev, setup_tap_dev(to_inet_addr(192, 168, 2, 2), 1518));
     const auto auto_dev = FileDescriptor(dev);
 
     const auto sock = FileDescriptor(socket(AF_INET, SOCK_STREAM, 0));
