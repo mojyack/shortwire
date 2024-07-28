@@ -3,6 +3,7 @@
 #include "p2p/peer-linker-protocol.hpp"
 #include "p2p/peer-linker-session.hpp"
 #include "p2p/ws/misc.hpp"
+#include "util/charconv.hpp"
 #include "util/event-fd.hpp"
 #include "util/fd.hpp"
 
@@ -32,7 +33,7 @@ class Session : public p2p::plink::PeerLinkerSession {
     auto on_packet_received(std::span<const std::byte> payload) -> bool override;
 
   public:
-    auto start(bool is_server) -> bool;
+    auto start(p2p::wss::ServerLocation peer_linker, bool is_server) -> bool;
     auto run() -> bool;
 };
 
@@ -66,13 +67,13 @@ auto Session::on_packet_received(std::span<const std::byte> payload) -> bool {
     }
 }
 
-auto Session::start(const bool is_server) -> bool {
+auto Session::start(const p2p::wss::ServerLocation peer_linker, const bool is_server) -> bool {
     const auto local_addr = is_server ? to_inet_addr(192, 168, 2, 1) : to_inet_addr(192, 168, 2, 2);
     unwrap_ob(dev, setup_tap_dev(local_addr, 1500));
     this->dev = FileDescriptor(dev);
 
     assert_b(p2p::plink::PeerLinkerSession::start({
-        .peer_linker     = {"192.168.1.1", 8080},
+        .peer_linker     = peer_linker,
         .stun_server     = {"stun.l.google.com", 19302},
         .pad_name        = is_server ? "server" : "client",
         .target_pad_name = is_server ? "" : "server",
@@ -105,18 +106,22 @@ loop:
 }
 
 auto run(const int argc, const char* const argv[]) -> bool {
-    assert_b(argc >= 2);
-    const auto command = std::string_view(argv[1]);
+    assert_b(argc >= 4);
+    const auto peer_linker_addr = argv[1];
+    unwrap_ob(peer_linker_port, from_chars<uint16_t>(argv[2]));
+    const auto peer_linker = p2p::wss::ServerLocation{peer_linker_addr, peer_linker_port};
+
+    const auto command = std::string_view(argv[3]);
 
     auto session = Session();
     ws::set_log_level(0x00);
     session.set_ws_debug_flags(false, true);
     if(command == "server") {
-        assert_b(session.start(true));
+        assert_b(session.start(peer_linker, true));
         assert_b(session.run());
         return true;
     } else if(command == "client") {
-        assert_b(session.start(false));
+        assert_b(session.start(peer_linker, false));
         assert_b(session.run());
         return true;
     } else {
