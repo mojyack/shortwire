@@ -3,6 +3,10 @@ project('p2p-vpn', 'cpp', version: '1.0.0', default_options : ['warning_level=3'
 deps = [
 ]
 
-executable('tcp-vpn', files('src/tcp-vpn.cpp'), 
-  dependencies : deps,
+tcp_vpn_files = files(
+  'src/tcp-vpn.cpp',
+  'src/common.cpp',
+)
+
+executable('tcp-vpn', tcp_vpn_files,
   install : true)

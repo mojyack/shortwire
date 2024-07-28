@@ -9,56 +9,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "common.hpp"
 #include "macros/unwrap.hpp"
 #include "util/charconv.hpp"
 #include "util/fd.hpp"
 
 namespace {
-auto print_mac_addr(const uint8_t* addr) -> void {
-    printf("%02x:%02x:%02x:%02x:%02x:%02x\n", addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
-}
-
-auto to_inet_addr(uint8_t a, const uint8_t b, const uint8_t c, const uint8_t d) -> uint32_t {
-    return a << 24 | b << 16 | c << 8 | d;
-}
-
-auto to_inet_addr(const char* const str) -> std::optional<uint32_t> {
-    auto addr = in_addr();
-    assert_o(inet_aton(str, &addr) == 1);
-    return ntohl(addr.s_addr);
-}
-
-auto setup_tap_dev(const uint32_t address) -> std::optional<FileDescriptor> {
-    auto dev = FileDescriptor(open("/dev/net/tun", O_RDWR));
-    assert_o(dev.as_handle() >= 0);
-
-    // create device
-    auto ifr      = ifreq();
-    ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
-    strncpy(ifr.ifr_name, "tun%d", IFNAMSIZ);
-    assert_o(ioctl(dev.as_handle(), TUNSETIFF, &ifr) == 0);
-    print("interface created: ", ifr.ifr_name);
-
-    // dummy socket for setting parameters
-    const auto sock = FileDescriptor(socket(AF_INET, SOCK_DGRAM, 0));
-
-    // set address
-    ifr.ifr_addr.sa_family                         = AF_INET;
-    ((sockaddr_in*)&ifr.ifr_addr)->sin_addr.s_addr = htonl(address);
-    assert_o(ioctl(sock.as_handle(), SIOCSIFADDR, &ifr) == 0, strerror(errno));
-
-    // set address mask
-    ((sockaddr_in*)&ifr.ifr_addr)->sin_addr.s_addr = htonl(to_inet_addr(255, 255, 255, 0));
-    assert_o(ioctl(sock.as_handle(), SIOCSIFNETMASK, &ifr) == 0);
-
-    // set flag
-    assert_o(ioctl(sock.as_handle(), SIOCGIFFLAGS, &ifr) == 0);
-    ifr.ifr_flags |= (IFF_UP | IFF_RUNNING);
-    assert_o(ioctl(sock.as_handle(), SIOCSIFFLAGS, &ifr) == 0);
-
-    return dev;
-}
-
 auto run_mainloop(const int dev, const int sock) -> bool {
     auto buf = std::array<char, 1536>();
 
@@ -87,6 +43,7 @@ loop:
 
 auto run_server(const uint16_t port) -> bool {
     unwrap_ob(dev, setup_tap_dev(to_inet_addr(192, 168, 2, 1)));
+    const auto auto_dev = FileDescriptor(dev);
 
     auto sock = FileDescriptor(socket(AF_INET, SOCK_STREAM, 0));
     assert_b(sock.as_handle() >= 0);
@@ -110,11 +67,12 @@ auto run_server(const uint16_t port) -> bool {
     const auto client_sock     = FileDescriptor(accept(sock.as_handle(), (sockaddr*)&client_addr, &client_addr_len));
     assert_b(client_sock.as_handle() >= 0);
 
-    return run_mainloop(dev.as_handle(), client_sock.as_handle());
+    return run_mainloop(dev, client_sock.as_handle());
 }
 
 auto run_client(const uint32_t address, const uint16_t port) -> bool {
     unwrap_ob(dev, setup_tap_dev(to_inet_addr(192, 168, 2, 2)));
+    const auto auto_dev = FileDescriptor(dev);
 
     const auto sock = FileDescriptor(socket(AF_INET, SOCK_STREAM, 0));
     assert_b(sock.as_handle() >= 0);
@@ -128,7 +86,7 @@ auto run_client(const uint32_t address, const uint16_t port) -> bool {
     };
     assert_b(connect(sock.as_handle(), (sockaddr*)&server_addr, sizeof(server_addr)) == 0);
 
-    return run_mainloop(dev.as_handle(), sock.as_handle());
+    return run_mainloop(dev, sock.as_handle());
 }
 
 auto run(const int argc, const char* const argv[]) -> bool {
