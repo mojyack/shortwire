@@ -114,8 +114,8 @@ auto run(const int argc, const char* const argv[]) -> bool {
     const auto command = std::string_view(argv[3]);
 
     auto session = Session();
-    ws::set_log_level(0x00);
-    session.set_ws_debug_flags(false, true);
+    ws::set_log_level(0b11);
+    session.set_ws_debug_flags(false, false);
     if(command == "server") {
         assert_b(session.start(peer_linker, true));
         assert_b(session.run());
