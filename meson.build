@@ -13,9 +13,19 @@ ws_vpn_files = files(
 ) + p2p_client_common_files
 ws_vpn_deps = p2p_client_common_deps
 
+p2p_vpn_files = files(
+  'src/p2p-vpn.cpp',
+  'src/common.cpp',
+) + p2p_client_ice_files
+p2p_vpn_deps = p2p_client_ice_deps
+
 executable('tcp-vpn', tcp_vpn_files,
   install : true)
 
 executable('ws-vpn', ws_vpn_files,
   dependencies : ws_vpn_deps,
+  install : true)
+
+executable('p2p-vpn', p2p_vpn_files,
+  dependencies : p2p_vpn_deps,
   install : true)
