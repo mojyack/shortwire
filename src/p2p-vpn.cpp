@@ -67,7 +67,7 @@ auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void
 
 auto Session::start(const p2p::wss::ServerLocation peer_linker, const bool is_server) -> bool {
     const auto local_addr = is_server ? to_inet_addr(192, 168, 2, 1) : to_inet_addr(192, 168, 2, 2);
-    unwrap_ob(dev, setup_tap_dev(local_addr, 1400));
+    unwrap_ob(dev, setup_tap_dev(local_addr, 1300));
     this->dev = FileDescriptor(dev);
 
     assert_b(p2p::ice::IceSession::start({
