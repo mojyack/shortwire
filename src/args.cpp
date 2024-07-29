@@ -34,6 +34,8 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
             ret.ws_only = true;
         } else if(str == "-v") {
             ret.verbose = true;
+        } else {
+            assert_o(false, "unknown argument");
         }
     }
 

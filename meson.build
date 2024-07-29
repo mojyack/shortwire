@@ -11,8 +11,12 @@ p2p_vpn_files = files(
   'src/p2p-vpn.cpp',
   'src/common.cpp',
   'src/args.cpp',
+  'src/aes.cpp',
 ) + p2p_client_ice_files
-p2p_vpn_deps = p2p_client_ice_deps
+
+p2p_vpn_deps = [
+  dependency('openssl'),
+] + p2p_client_ice_deps
 
 executable('tcp-vpn', tcp_vpn_files,
   install : true)
