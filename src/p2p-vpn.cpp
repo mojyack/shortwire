@@ -27,6 +27,7 @@ using Key = std::array<std::byte, 16>;
 
 class Session : public p2p::ice::IceSession {
   private:
+    Key                 key;
     FileDescriptor      dev;
     EventFileDescriptor stop;
     bool                ws_only;
@@ -41,6 +42,7 @@ class Session : public p2p::ice::IceSession {
 
     auto start(p2p::wss::ServerLocation peer_linker, bool is_server, bool ws_only) -> bool;
     auto run() -> bool;
+    auto load_key(const char* key_path) -> bool;
 };
 
 auto calc_xor(std::byte* const a, const std::byte* const b, const size_t len) -> void {
@@ -81,7 +83,7 @@ auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void
 }
 
 auto Session::start(const p2p::wss::ServerLocation peer_linker, const bool is_server, const bool ws_only) -> bool {
-    this->ws_only    = ws_only;
+    this->ws_only = ws_only;
 
     const auto local_addr = is_server ? to_inet_addr(192, 168, 2, 1) : to_inet_addr(192, 168, 2, 2);
     unwrap_ob(dev, setup_tap_dev(local_addr, ws_only ? 1500 : 1300));
@@ -132,6 +134,15 @@ loop:
     goto loop;
 }
 
+auto Session::load_key(const char* const key_path) -> bool {
+    const auto key_r = read_binary(key_path);
+    assert_b(key_r, key_r.as_error().cstr());
+    const auto key_b = key_r.as_value();
+    assert_b(key_b.size() == key.size());
+    std::memcpy(key.data(), key_b.data(), key.size());
+    return true;
+}
+
 auto run(const int argc, const char* const argv[]) -> bool {
     unwrap_ob(args, Args::parse(argc, argv));
     const auto peer_linker = p2p::wss::ServerLocation{args.peer_linker_addr, args.peer_linker_port};
@@ -140,6 +151,7 @@ auto run(const int argc, const char* const argv[]) -> bool {
     session.verbose = args.verbose;
     ws::set_log_level(0b11);
     session.set_ws_debug_flags(false, false);
+    assert_b(session.load_key(args.key_file));
     assert_b(session.start(peer_linker, args.server, args.ws_only));
     assert_b(session.run());
     return true;
