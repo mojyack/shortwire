@@ -27,7 +27,8 @@ class Session : public p2p::ice::IceSession {
     FileDescriptor      dev;
     EventFileDescriptor stop;
 
-    auto auth_peer(std::string_view peer_name) -> bool override;
+    auto get_auth_secret() -> std::vector<std::byte> override;
+    auto auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool override;
     auto on_pad_created() -> void override;
     auto on_disconnected() -> void override;
     auto on_p2p_packet_received(std::span<const std::byte> payload) -> void override;
@@ -39,7 +40,11 @@ class Session : public p2p::ice::IceSession {
     auto run() -> bool;
 };
 
-auto Session::auth_peer(const std::string_view peer_name) -> bool {
+auto Session::get_auth_secret() -> std::vector<std::byte> {
+    return {};
+}
+
+auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool {
     return peer_name == "client";
 }
 

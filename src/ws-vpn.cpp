@@ -27,7 +27,7 @@ class Session : public p2p::plink::PeerLinkerSession {
     FileDescriptor      dev;
     EventFileDescriptor stop;
 
-    auto auth_peer(std::string_view peer_name) -> bool override;
+    auto auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool override;
     auto on_pad_created() -> void override;
     auto on_disconnected() -> void override;
     auto on_packet_received(std::span<const std::byte> payload) -> bool override;
@@ -37,7 +37,7 @@ class Session : public p2p::plink::PeerLinkerSession {
     auto run() -> bool;
 };
 
-auto Session::auth_peer(const std::string_view peer_name) -> bool {
+auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool {
     return peer_name == "client";
 }
 
