@@ -49,12 +49,15 @@ class Session : public p2p::ice::IceSession {
     FileDescriptor      dev;
     EventFileDescriptor stop;
     bool                ws_only;
+    bool                key_loaded = false;
 
     auto auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool override;
     auto on_pad_created() -> void override;
     auto on_disconnected() -> void override;
     auto on_packet_received(std::span<const std::byte> payload) -> bool override;
     auto on_p2p_packet_received(std::span<const std::byte> payload) -> void override;
+
+    auto process_received_ethernet_frame(std::span<const std::byte> data) -> bool;
 
   public:
     bool verbose = false;
@@ -98,6 +101,7 @@ auto Session::on_packet_received(const std::span<const std::byte> payload) -> bo
 
     switch(header.type) {
     case proto::Type::EncKey: {
+        assert_b(key_loaded);
         unwrap_pb(packet, p2p::proto::extract_payload<proto::EncKey>(payload));
 
         iv = packet.iv;
@@ -111,14 +115,7 @@ auto Session::on_packet_received(const std::span<const std::byte> payload) -> bo
         return true;
     }
     case proto::Type::EthernetFrame: {
-        auto encrypted = payload.subspan(sizeof(proto::EthernetFrame));
-        if(verbose) {
-            print(">>> ", encrypted.size(), " bytes");
-        }
-        assert_b(encrypted.size() >= 0);
-        unwrap_ob(decrypted, aes::decrypt(key, iv, encrypted));
-        assert_b(size_t(write(dev.as_handle(), decrypted.data(), decrypted.size())) == decrypted.size(), strerror(errno));
-
+        assert_b(process_received_ethernet_frame(payload.subspan(sizeof(proto::EthernetFrame))));
         send_result(p2p::plink::proto::Type::Success, header.id);
         return true;
     }
@@ -136,18 +133,27 @@ auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void
 
     switch(header.type) {
     case proto::Type::EthernetFrame: {
-        auto encrypted = payload.subspan(sizeof(proto::EthernetFrame));
-        if(verbose) {
-            print(">>> ", encrypted.size(), " bytes");
-        }
-        assert_n(encrypted.size() >= 0);
-        unwrap_on(decrypted, aes::decrypt(key, iv, encrypted));
-        assert_n(size_t(write(dev.as_handle(), decrypted.data(), decrypted.size())) == decrypted.size(), strerror(errno));
+        assert_n(process_received_ethernet_frame(payload.subspan(sizeof(proto::EthernetFrame))));
         return;
     }
     default:
         WARN("unknown packet type");
+        return;
     }
+}
+
+auto Session::process_received_ethernet_frame(std::span<const std::byte> data) -> bool {
+    if(verbose) {
+        print(">>> ", data.size(), " bytes");
+    }
+    auto decrypted = std::vector<std::byte>();
+    if(key_loaded) {
+        unwrap_ob_mut(dec, aes::decrypt(key, iv, data));
+        decrypted = std::move(dec);
+        data      = decrypted;
+    }
+    assert_b(size_t(write(dev.as_handle(), data.data(), data.size())) == data.size(), strerror(errno));
+    return true;
 }
 
 auto Session::start(const p2p::wss::ServerLocation peer_linker, const bool is_server, const bool ws_only) -> bool {
@@ -161,7 +167,7 @@ auto Session::start(const p2p::wss::ServerLocation peer_linker, const bool is_se
         Event key;
     };
     auto events = std::shared_ptr<Events>(new Events());
-    if(!is_server) {
+    if(!is_server && key_loaded) {
         add_event_handler(EventKind::EncKeyReceived, [events](uint32_t) { events->key.notify(); });
     }
     const auto params = p2p::plink::PeerLinkerSessionParams{
@@ -174,6 +180,11 @@ auto Session::start(const p2p::wss::ServerLocation peer_linker, const bool is_se
         assert_b(p2p::plink::PeerLinkerSession::start(params));
     } else {
         assert_b(p2p::ice::IceSession::start(params));
+    }
+
+    if(!key_loaded) {
+        warn("no private key provided\ncontinuing without encryption");
+        return true;
     }
 
     // start authentication
@@ -206,7 +217,13 @@ loop:
             print("<<< ", len, " bytes");
         }
         assert_b(len > 0);
-        unwrap_ob(payload, aes::encrypt(key, iv, std::span<std::byte>{(std::byte*)buf.data(), size_t(len)}));
+        auto payload   = std::span<std::byte>((std::byte*)buf.data(), size_t(len));
+        auto encrypted = std::vector<std::byte>();
+        if(key_loaded) {
+            unwrap_ob_mut(enc, aes::encrypt(key, iv, payload));
+            encrypted = std::move(enc);
+            payload   = encrypted;
+        }
         if(ws_only) {
             send_packet_detached(
                 proto::Type::EthernetFrame, [](uint32_t result) {
@@ -229,6 +246,7 @@ auto Session::load_key(const char* const key_path) -> bool {
     const auto key_b = key_r.as_value();
     assert_b(key_b.size() == key.size());
     std::memcpy(key.data(), key_b.data(), key.size());
+    key_loaded = true;
     return true;
 }
 
@@ -240,7 +258,9 @@ auto run(const int argc, const char* const argv[]) -> bool {
     session.verbose = args.verbose;
     ws::set_log_level(0b11);
     session.set_ws_debug_flags(false, false);
-    assert_b(session.load_key(args.key_file));
+    if(args.key_file != nullptr) {
+        assert_b(session.load_key(args.key_file));
+    }
     assert_b(session.start(peer_linker, args.server, args.ws_only));
     print("ready");
     assert_b(session.run());

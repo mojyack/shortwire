@@ -39,7 +39,6 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
         }
     }
 
-    assert_o(ret.key_file != nullptr);
     assert_o(ret.peer_linker_addr != nullptr);
     assert_o(ret.peer_linker_port != 0);
     return ret;
