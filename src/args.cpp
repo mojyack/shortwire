@@ -20,6 +20,11 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
             assert_o(i < argc);
             unwrap_oo(value, from_chars<uint16_t>(argv[i]));
             ret.peer_linker_port = value;
+        } else if(str == "--subnet") {
+            i += 1;
+            assert_o(i < argc);
+            unwrap_oo(value, from_chars<uint8_t>(argv[i]));
+            ret.subnet = value;
         } else if(str == "--role") {
             i += 1;
             assert_o(i < argc);
