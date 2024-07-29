@@ -7,6 +7,7 @@ struct Args {
     uint16_t    peer_linker_port;
     bool        verbose;
     bool        server;
+    bool        ws_only;
 
     static auto parse(int argc, const char* const argv[]) -> std::optional<Args>;
 };
