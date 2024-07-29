@@ -55,7 +55,6 @@ auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void
     switch(header.type) {
     case proto::Type::EthernetFrame: {
         auto data = payload.subspan(sizeof(proto::EthernetFrame));
-        print(">>> ", data.size(), " bytes");
         assert_n(data.size() >= 0);
         assert_n(size_t(write(dev.as_handle(), data.data(), data.size())) == data.size(), strerror(errno));
         return;
@@ -89,7 +88,6 @@ loop:
     assert_b(poll(fds.data(), fds.size(), -1) != -1);
     if(fds[0].revents & POLLIN) {
         const auto len = read(fds[0].fd, buf.data(), buf.size());
-        print("<<< ", len, " bytes");
         assert_b(len > 0);
         send_packet_p2p(p2p::proto::build_packet(proto::Type::EthernetFrame, 0, std::span<std::byte>{(std::byte*)buf.data(), size_t(len)}));
     }
