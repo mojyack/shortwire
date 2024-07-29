@@ -221,7 +221,7 @@ loop:
         if(verbose) {
             print("<<< ", len, " bytes");
         }
-        if(!key_prepared) {
+        if(key_loaded && !key_prepared) {
             warn("encryption key not prepared yet");
             goto loop;
         }
