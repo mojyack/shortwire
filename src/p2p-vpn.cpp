@@ -48,7 +48,8 @@ class Session : public p2p::ice::IceSession {
     Key                 key;
     FileDescriptor      dev;
     EventFileDescriptor stop;
-    bool                ws_only;
+    bool                ws_only    = false;
+    bool                verbose    = false;
     bool                key_loaded = false;
 
     auto auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool override;
@@ -57,14 +58,12 @@ class Session : public p2p::ice::IceSession {
     auto on_packet_received(std::span<const std::byte> payload) -> bool override;
     auto on_p2p_packet_received(std::span<const std::byte> payload) -> void override;
 
+    auto load_key(const char* key_path) -> bool;
     auto process_received_ethernet_frame(std::span<const std::byte> data) -> bool;
 
   public:
-    bool verbose = false;
-
-    auto start(p2p::wss::ServerLocation peer_linker, uint8_t subnet, bool is_server, bool ws_only) -> bool;
+    auto start(Args args) -> bool;
     auto run() -> bool;
-    auto load_key(const char* key_path) -> bool;
 };
 
 auto calc_xor(std::byte* const a, const std::byte* const b, const size_t len) -> void {
@@ -156,10 +155,14 @@ auto Session::process_received_ethernet_frame(std::span<const std::byte> data) -
     return true;
 }
 
-auto Session::start(const p2p::wss::ServerLocation peer_linker, const uint8_t subnet, const bool is_server, const bool ws_only) -> bool {
-    this->ws_only = ws_only;
+auto Session::start(Args args) -> bool {
+    verbose = args.verbose;
+    ws_only = args.ws_only;
+    if(args.key_file != nullptr) {
+        assert_b(load_key(args.key_file));
+    }
 
-    const auto local_addr = is_server ? to_inet_addr(192, 168, subnet, 1) : to_inet_addr(192, 168, subnet, 2);
+    const auto local_addr = to_inet_addr(192, 168, args.subnet, args.server ? 1 : 2);
     unwrap_ob(dev, setup_tap_dev(local_addr, ws_only ? 1500 : 1300));
     this->dev = FileDescriptor(dev);
 
@@ -167,14 +170,14 @@ auto Session::start(const p2p::wss::ServerLocation peer_linker, const uint8_t su
         Event key;
     };
     auto events = std::shared_ptr<Events>(new Events());
-    if(!is_server && key_loaded) {
+    if(!args.server && key_loaded) {
         add_event_handler(EventKind::EncKeyReceived, [events](uint32_t) { events->key.notify(); });
     }
     const auto params = p2p::plink::PeerLinkerSessionParams{
-        .peer_linker     = peer_linker,
+        .peer_linker     = p2p::wss::ServerLocation{args.peer_linker_addr, args.peer_linker_port},
         .stun_server     = {"stun.l.google.com", 19302},
-        .pad_name        = is_server ? "server" : "client",
-        .target_pad_name = is_server ? "" : "server",
+        .pad_name        = args.server ? "server" : "client",
+        .target_pad_name = args.server ? "" : "server",
     };
     if(ws_only) {
         assert_b(p2p::plink::PeerLinkerSession::start(params));
@@ -187,8 +190,7 @@ auto Session::start(const p2p::wss::ServerLocation peer_linker, const uint8_t su
         return true;
     }
 
-    // start authentication
-    if(is_server) {
+    if(args.server) {
         iv                     = generate_key();
         const auto session_key = generate_key();
         if(verbose) {
@@ -252,16 +254,11 @@ auto Session::load_key(const char* const key_path) -> bool {
 
 auto run(const int argc, const char* const argv[]) -> bool {
     unwrap_ob(args, Args::parse(argc, argv));
-    const auto peer_linker = p2p::wss::ServerLocation{args.peer_linker_addr, args.peer_linker_port};
 
-    auto session    = Session();
-    session.verbose = args.verbose;
     ws::set_log_level(0b11);
+    auto session = Session();
     session.set_ws_debug_flags(false, false);
-    if(args.key_file != nullptr) {
-        assert_b(session.load_key(args.key_file));
-    }
-    assert_b(session.start(peer_linker, args.subnet, args.server, args.ws_only));
+    assert_b(session.start(args));
     print("ready");
     assert_b(session.run());
     return true;
