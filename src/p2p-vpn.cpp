@@ -48,9 +48,10 @@ class Session : public p2p::ice::IceSession {
     Key                 key;
     FileDescriptor      dev;
     EventFileDescriptor stop;
-    bool                ws_only    = false;
-    bool                verbose    = false;
-    bool                key_loaded = false;
+    bool                ws_only      = false;
+    bool                verbose      = false;
+    bool                key_loaded   = false;
+    bool                key_prepared = false;
 
     auto auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool override;
     auto on_pad_created() -> void override;
@@ -105,6 +106,7 @@ auto Session::on_packet_received(const std::span<const std::byte> payload) -> bo
 
         iv = packet.iv;
         calc_xor(key.data(), packet.key.data(), key.size());
+        key_prepared = true;
         if(verbose) {
             print("received session key");
         }
@@ -198,6 +200,7 @@ auto Session::start(Args args) -> bool {
         }
         assert_b(send_packet(proto::Type::EncKey, iv, session_key));
         calc_xor(key.data(), session_key.data(), key.size());
+        key_prepared = true;
     } else {
         events->key.wait();
     }
@@ -217,6 +220,10 @@ loop:
         const auto len = read(fds[0].fd, buf.data(), buf.size());
         if(verbose) {
             print("<<< ", len, " bytes");
+        }
+        if(!key_prepared) {
+            warn("encryption key not prepared yet");
+            goto loop;
         }
         assert_b(len > 0);
         auto payload   = std::span<std::byte>((std::byte*)buf.data(), size_t(len));
