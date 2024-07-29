@@ -92,7 +92,7 @@ auto Session::on_pad_created() -> void {
 }
 
 auto Session::on_disconnected() -> void {
-    PRINT("session disconnected");
+    print("session disconnected");
     stop.notify();
 }
 
