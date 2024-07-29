@@ -1,9 +1,9 @@
+#include "args.hpp"
 #include "common.hpp"
 #include "macros/unwrap.hpp"
 #include "p2p/ice-session-protocol.hpp"
 #include "p2p/ice-session.hpp"
 #include "p2p/ws/misc.hpp"
-#include "util/charconv.hpp"
 #include "util/event-fd.hpp"
 #include "util/fd.hpp"
 
@@ -33,6 +33,8 @@ class Session : public p2p::ice::IceSession {
     auto on_p2p_packet_received(std::span<const std::byte> payload) -> void override;
 
   public:
+    bool verbose = false;
+
     auto start(p2p::wss::ServerLocation peer_linker, bool is_server) -> bool;
     auto run() -> bool;
 };
@@ -55,6 +57,9 @@ auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void
     switch(header.type) {
     case proto::Type::EthernetFrame: {
         auto data = payload.subspan(sizeof(proto::EthernetFrame));
+        if(verbose) {
+            print(">>> ", data.size(), " bytes");
+        }
         assert_n(data.size() >= 0);
         assert_n(size_t(write(dev.as_handle(), data.data(), data.size())) == data.size(), strerror(errno));
         return;
@@ -88,6 +93,9 @@ loop:
     assert_b(poll(fds.data(), fds.size(), -1) != -1);
     if(fds[0].revents & POLLIN) {
         const auto len = read(fds[0].fd, buf.data(), buf.size());
+        if(verbose) {
+            print("<<< ", len, " bytes");
+        }
         assert_b(len > 0);
         send_packet_p2p(p2p::proto::build_packet(proto::Type::EthernetFrame, 0, std::span<std::byte>{(std::byte*)buf.data(), size_t(len)}));
     }
@@ -98,27 +106,16 @@ loop:
 }
 
 auto run(const int argc, const char* const argv[]) -> bool {
-    assert_b(argc >= 4);
-    const auto peer_linker_addr = argv[1];
-    unwrap_ob(peer_linker_port, from_chars<uint16_t>(argv[2]));
-    const auto peer_linker = p2p::wss::ServerLocation{peer_linker_addr, peer_linker_port};
+    unwrap_ob(args, Args::parse(argc, argv));
+    const auto peer_linker = p2p::wss::ServerLocation{args.peer_linker_addr, args.peer_linker_port};
 
-    const auto command = std::string_view(argv[3]);
-
-    auto session = Session();
+    auto session    = Session();
+    session.verbose = args.verbose;
     ws::set_log_level(0b11);
     session.set_ws_debug_flags(false, false);
-    if(command == "server") {
-        assert_b(session.start(peer_linker, true));
-        assert_b(session.run());
-        return true;
-    } else if(command == "client") {
-        assert_b(session.start(peer_linker, false));
-        assert_b(session.run());
-        return true;
-    } else {
-        assert_b(false, "unknown command");
-    }
+    assert_b(session.start(peer_linker, args.server));
+    assert_b(session.run());
+    return true;
 }
 } // namespace
 

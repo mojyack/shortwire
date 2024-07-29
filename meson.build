@@ -16,6 +16,7 @@ ws_vpn_deps = p2p_client_common_deps
 p2p_vpn_files = files(
   'src/p2p-vpn.cpp',
   'src/common.cpp',
+  'src/args.cpp',
 ) + p2p_client_ice_files
 p2p_vpn_deps = p2p_client_ice_deps
 
