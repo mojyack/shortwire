@@ -4,6 +4,20 @@
 #include "macros/unwrap.hpp"
 #include "util/charconv.hpp"
 
+namespace {
+const auto usage = R"(usage: p2p-vpn (option)...
+options:
+    --peer-linker-addr HOSTNAME         peer-linker address
+    --peer-linker-port PORT             peer-linker port number
+    --key              FILE_PATH        path to encryption key
+    --subnet           SUBNET           x of 192.168.x.(1,2)
+    --role             server,client    role of this process
+    --websocket-only                    do not use p2p connection
+    -v                                  enable verbose output
+    -h,--help                           print this help message
+)";
+}
+
 auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args> {
     auto ret = Args();
     for(auto i = 1; i < argc; i += 1) {
@@ -39,12 +53,15 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
             ret.ws_only = true;
         } else if(str == "-v") {
             ret.verbose = true;
+        } else if(str == "-h" || str == "--help") {
+            print(usage);
+            exit(0);
         } else {
             assert_o(false, "unknown argument");
         }
     }
 
-    assert_o(ret.peer_linker_addr != nullptr);
-    assert_o(ret.peer_linker_port != 0);
+    assert_o(ret.peer_linker_addr != nullptr, "no peer-linker address given");
+    assert_o(ret.peer_linker_port != 0, "no peer-linker port given");
     return ret;
 }
