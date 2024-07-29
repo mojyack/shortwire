@@ -85,7 +85,7 @@ auto generate_key() -> Key {
 
 auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> /*secret*/) -> bool {
     // we don't use this auth method
-    return peer_name == "client";
+    return peer_name.starts_with("vpn-client");
 }
 
 auto Session::on_pad_created() -> void {
@@ -175,16 +175,18 @@ auto Session::start(Args args) -> bool {
     if(!args.server && key_loaded) {
         add_event_handler(EventKind::EncKeyReceived, [events](uint32_t) { events->key.notify(); });
     }
-    const auto params = p2p::plink::PeerLinkerSessionParams{
-        .peer_linker     = p2p::wss::ServerLocation{args.peer_linker_addr, args.peer_linker_port},
-        .stun_server     = {"stun.l.google.com", 19302},
-        .pad_name        = args.server ? "server" : "client",
-        .target_pad_name = args.server ? "" : "server",
+    const auto server_pad_name = build_string("vpn-server_subnet-", args.subnet);
+    const auto client_pad_name = build_string("vpn-client_subnet-", args.subnet);
+    const auto plink_params    = p2p::plink::PeerLinkerSessionParams{
+           .peer_linker     = p2p::wss::ServerLocation{args.peer_linker_addr, args.peer_linker_port},
+           .stun_server     = {"stun.l.google.com", 19302},
+           .pad_name        = args.server ? server_pad_name : client_pad_name,
+           .target_pad_name = args.server ? "" : server_pad_name,
     };
     if(ws_only) {
-        assert_b(p2p::plink::PeerLinkerSession::start(params));
+        assert_b(p2p::plink::PeerLinkerSession::start(plink_params));
     } else {
-        assert_b(p2p::ice::IceSession::start(params));
+        assert_b(p2p::ice::IceSession::start(plink_params));
     }
 
     if(!key_loaded) {
