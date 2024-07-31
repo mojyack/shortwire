@@ -175,8 +175,8 @@ auto Session::start(Args args) -> bool {
     if(!args.server && key_loaded) {
         add_event_handler(EventKind::EncKeyReceived, [events](uint32_t) { events->key.notify(); });
     }
-    const auto server_pad_name = build_string("vpn-server_subnet-", args.subnet);
-    const auto client_pad_name = build_string("vpn-client_subnet-", args.subnet);
+    const auto server_pad_name = build_string("vpn-server_subnet-", int(args.subnet));
+    const auto client_pad_name = build_string("vpn-client_subnet-", int(args.subnet));
     const auto plink_params    = p2p::plink::PeerLinkerSessionParams{
            .peer_linker     = p2p::wss::ServerLocation{args.peer_linker_addr, args.peer_linker_port},
            .stun_server     = {"stun.l.google.com", 19302},
