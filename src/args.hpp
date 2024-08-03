@@ -9,6 +9,7 @@ struct Args {
     bool        verbose = false;
     bool        server  = false;
     bool        ws_only = false;
+    bool        help    = false;
 
     static auto parse(int argc, const char* const argv[]) -> std::optional<Args>;
 };

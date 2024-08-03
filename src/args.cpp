@@ -11,9 +11,10 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
     parser.kwarg(&args.server, {"--server"}, {"", "act as a server", args::State::Initialized});
     parser.kwarg(&args.ws_only, {"--websocket-only"}, {"", "do not use p2p connection", args::State::Initialized});
     parser.kwarg(&args.ws_only, {"-v"}, {"", "enable verbose output", args::State::Initialized});
-    if(!parser.parse(argc, argv)) {
+    parser.kwarg(&args.help, {"-h", "--help"}, {.arg_desc = "enable verbose output", .state = args::State::Initialized, .no_error_check = true});
+    if(!parser.parse(argc, argv) || args.help) {
         print("usage: p2p-vpn ", parser.get_help());
-        return std::nullopt;
+        exit(0);
     }
     return args;
 }
