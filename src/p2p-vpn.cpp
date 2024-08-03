@@ -1,8 +1,8 @@
 #include <random>
 
-#include "aes.hpp"
 #include "args.hpp"
 #include "common.hpp"
+#include "crypto/aes.hpp"
 #include "macros/unwrap.hpp"
 #include "p2p/ice-session-protocol.hpp"
 #include "p2p/ice-session.hpp"
@@ -29,8 +29,8 @@ struct EthernetFrame : ::p2p::proto::Packet {
 };
 
 struct EncKey : ::p2p::proto::Packet {
-    aes::IV iv;
-    Key     key;
+    crypto::aes::IV iv;
+    Key             key;
 };
 } // namespace proto
 
@@ -44,7 +44,7 @@ struct EventKind {
 
 class Session : public p2p::ice::IceSession {
   private:
-    aes::IV             iv;
+    crypto::aes::IV     iv;
     Key                 key;
     FileDescriptor      dev;
     EventFileDescriptor stop;
@@ -149,7 +149,7 @@ auto Session::process_received_ethernet_frame(std::span<const std::byte> data) -
     }
     auto decrypted = std::vector<std::byte>();
     if(key_loaded) {
-        unwrap_ob_mut(dec, aes::decrypt(key, iv, data));
+        unwrap_ob_mut(dec, crypto::aes::decrypt(key, iv, data));
         decrypted = std::move(dec);
         data      = decrypted;
     }
@@ -231,7 +231,7 @@ loop:
         auto payload   = std::span<std::byte>((std::byte*)buf.data(), size_t(len));
         auto encrypted = std::vector<std::byte>();
         if(key_loaded) {
-            unwrap_ob_mut(enc, aes::encrypt(key, iv, payload));
+            unwrap_ob_mut(enc, crypto::aes::encrypt(key, iv, payload));
             encrypted = std::move(enc);
             payload   = encrypted;
         }
