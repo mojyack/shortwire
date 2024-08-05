@@ -9,7 +9,7 @@
 #include "p2p/ws/misc.hpp"
 #include "util/event-fd.hpp"
 #include "util/fd.hpp"
-#include "util/misc.hpp"
+#include "util/file-io.hpp"
 
 namespace {
 using Key = std::array<std::byte, 16>;
@@ -252,9 +252,7 @@ loop:
 }
 
 auto Session::load_key(const char* const key_path) -> bool {
-    const auto key_r = read_binary(key_path);
-    assert_b(key_r, key_r.as_error().cstr());
-    const auto key_b = key_r.as_value();
+    unwrap_ob(key_b, read_file(key_path));
     assert_b(key_b.size() == key.size());
     std::memcpy(key.data(), key_b.data(), key.size());
     key_loaded = true;
