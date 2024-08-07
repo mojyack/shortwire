@@ -169,7 +169,7 @@ auto Session::start(Args args) -> bool {
     this->dev = FileDescriptor(dev);
 
     struct Events {
-        Event key;
+        p2p::Event key;
     };
     auto events = std::shared_ptr<Events>(new Events());
     if(!args.server && key_loaded) {
