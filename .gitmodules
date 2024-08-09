@@ -1,0 +1,12 @@
+[submodule "submodules/cutil"]
+	path = submodules/cutil
+	url = https://github.com/mojyack/cutil.git
+[submodule "submodules/cutil-macros"]
+	path = submodules/cutil-macros
+	url = https://github.com/mojyack/cutil-macros.git
+[submodule "submodules/peer-linker"]
+	path = submodules/peer-linker
+	url = https://github.com/mojyack/peer-linker.git
+[submodule "submodules/crypto-utils"]
+	path = submodules/crypto-utils
+	url = https://github.com/mojyack/crypto-utils.git
