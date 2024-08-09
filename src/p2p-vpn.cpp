@@ -179,14 +179,13 @@ auto Session::start(Args args) -> bool {
     const auto client_pad_name = build_string("vpn-client_subnet-", int(args.subnet));
     const auto plink_params    = p2p::plink::PeerLinkerSessionParams{
            .peer_linker     = p2p::wss::ServerLocation{args.peer_linker_addr, args.peer_linker_port},
-           .stun_server     = {"stun.l.google.com", 19302},
            .pad_name        = args.server ? server_pad_name : client_pad_name,
            .target_pad_name = args.server ? "" : server_pad_name,
     };
     if(ws_only) {
         assert_b(p2p::plink::PeerLinkerSession::start(plink_params));
     } else {
-        assert_b(p2p::ice::IceSession::start(plink_params));
+        assert_b(p2p::ice::IceSession::start({{"stun.l.google.com", 19302}, {}}, plink_params));
     }
 
     if(!key_loaded) {
