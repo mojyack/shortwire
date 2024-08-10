@@ -2,7 +2,8 @@
 #include <optional>
 
 struct Args {
-    const char* key_file = nullptr;
+    const char* key_file                   = nullptr;
+    const char* peer_linker_user_cert_path = nullptr;
     const char* peer_linker_addr;
     uint16_t    peer_linker_port;
     uint8_t     subnet  = 2;
