@@ -9,15 +9,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "common.hpp"
 #include "macros/assert.hpp"
 #include "util/fd.hpp"
 
 auto print_mac_addr(const uint8_t* const addr) -> void {
     printf("%02x:%02x:%02x:%02x:%02x:%02x\n", addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
-}
-
-auto to_inet_addr(uint8_t a, const uint8_t b, const uint8_t c, const uint8_t d) -> uint32_t {
-    return a << 24 | b << 16 | c << 8 | d;
 }
 
 auto to_inet_addr(const char* const str) -> std::optional<uint32_t> {
