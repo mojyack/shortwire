@@ -7,6 +7,3 @@
 [submodule "submodules/peer-linker"]
 	path = submodules/peer-linker
 	url = https://github.com/mojyack/peer-linker.git
-[submodule "submodules/crypto-utils"]
-	path = submodules/crypto-utils
-	url = https://github.com/mojyack/crypto-utils.git
