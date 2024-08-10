@@ -4,6 +4,7 @@
 auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args> {
     auto args   = Args();
     auto parser = args::Parser<uint8_t, uint16_t>();
+    parser.kwarg(&args.username, {"-u", "--username"}, {"USERNAME", "name to identify you from other users"});
     parser.kwarg(&args.peer_linker_addr, {"-pa", "--peer-linker-addr"}, {"HOSTNAME", "peer-linker address"});
     parser.kwarg(&args.peer_linker_port, {"-pp", "--peer-linker-port"}, {"PORT", "peer-linker port number", args::State::DefaultValue});
     parser.kwarg(&args.peer_linker_user_cert_path, {"-pc", "--peer-linker-cert"}, {"FILE", "user certificate for peer-linker", args::State::Initialized});

@@ -2,6 +2,7 @@
 #include <optional>
 
 struct Args {
+    const char* username                   = nullptr;
     const char* key_file                   = nullptr;
     const char* peer_linker_user_cert_path = nullptr;
     const char* peer_linker_addr;
