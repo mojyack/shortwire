@@ -4,7 +4,7 @@ subdir('src/p2p')
 subdir('src/crypto')
 
 executable('shortwired', files(
-    'src/p2p-vpn.cpp',
+    'src/shortwired.cpp',
     'src/common.cpp',
     'src/args.cpp',
     'src/crypto/aes.cpp',
