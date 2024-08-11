@@ -8,6 +8,7 @@ executable('shortwired', files(
     'src/common.cpp',
     'src/args.cpp',
     'src/crypto/aes.cpp',
+    'src/crypto/random.cpp',
   ) + p2p_client_ice_files,
   dependencies : p2p_client_ice_deps + crypto_utils_deps,
   install : true)

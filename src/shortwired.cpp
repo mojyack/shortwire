@@ -1,8 +1,7 @@
-#include <random>
-
 #include "args.hpp"
 #include "common.hpp"
 #include "crypto/aes.hpp"
+#include "crypto/random.hpp"
 #include "macros/unwrap.hpp"
 #include "p2p/ice-session-protocol.hpp"
 #include "p2p/ice-session.hpp"
@@ -76,13 +75,9 @@ auto calc_xor(std::byte* const a, const std::byte* const b, const size_t len) ->
 }
 
 auto generate_key() -> Key {
-    static auto engine = std::mt19937((std::random_device())());
-
-    auto nonce = Key();
-    for(auto& b : nonce) {
-        b = std::byte(engine());
-    }
-    return nonce;
+    auto key = Key();
+    crypto::random::fill_by_random(key);
+    return key;
 }
 
 auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> /*secret*/) -> bool {
