@@ -39,7 +39,8 @@ class Session : public p2p::ice::IceSession {
     EventFileDescriptor stop;
     EncMethod           enc_method = EncMethod::None;
 
-    crypto::AutoCipherContext cipher_context;
+    crypto::AutoCipherContext enc_context;
+    crypto::AutoCipherContext dec_context;
     Key                       key;
 
     bool ws_only = false;
@@ -140,14 +141,14 @@ auto Session::process_received_ethernet_frame(std::span<const std::byte> data) -
     case EncMethod::AES: {
         assert_b(data.size() > crypto::aes::iv_len, "packet too short");
         const auto [iv, enc] = split_iv_enc(data, crypto::aes::iv_len);
-        unwrap_ob_mut(dec, crypto::aes::decrypt(cipher_context.get(), key, iv, enc));
+        unwrap_ob_mut(dec, crypto::aes::decrypt(dec_context.get(), key, iv, enc));
         decrypted = std::move(dec);
         data      = decrypted;
     } break;
     case EncMethod::C20P1305: {
         assert_b(data.size() > crypto::c20p1305::iv_len, "packet too short");
         const auto [iv, enc] = split_iv_enc(data, crypto::c20p1305::iv_len);
-        unwrap_ob_mut(dec, crypto::c20p1305::decrypt(cipher_context.get(), key, iv, enc));
+        unwrap_ob_mut(dec, crypto::c20p1305::decrypt(dec_context.get(), key, iv, enc));
         decrypted = std::move(dec);
         data      = decrypted;
     } break;
@@ -217,15 +218,14 @@ loop:
             break;
         case EncMethod::AES: {
             const auto iv = generate_random_bytes<uint64_t, crypto::aes::iv_len>();
-            unwrap_ob_mut(enc, crypto::aes::encrypt(cipher_context.get(), key, iv, payload));
+            unwrap_ob_mut(enc, crypto::aes::encrypt(enc_context.get(), key, iv, payload));
             encrypted = concat(iv, enc);
             payload   = encrypted;
         } break;
         case EncMethod::C20P1305: {
             const auto iv = generate_random_bytes<uint64_t, crypto::c20p1305::iv_len>();
-            unwrap_ob_mut(enc, crypto::c20p1305::encrypt(cipher_context.get(), key, iv, payload));
+            unwrap_ob_mut(enc, crypto::c20p1305::encrypt(enc_context.get(), key, iv, payload));
             encrypted = concat(iv, enc);
-            print("input ", payload.size(), " output ", encrypted.size());
             payload = encrypted;
         } break;
         }
@@ -250,7 +250,8 @@ auto Session::load_key(const EncMethod enc_method, const char* const key_path) -
     unwrap_ob(key_b, read_file(key_path));
     assert_b(key_b.size() == key.size());
     std::memcpy(key.data(), key_b.data(), key.size());
-    cipher_context.reset(crypto::alloc_cipher_context());
+    enc_context.reset(crypto::alloc_cipher_context());
+    dec_context.reset(crypto::alloc_cipher_context());
     this->enc_method = enc_method;
     return true;
 }
