@@ -19,7 +19,6 @@ namespace proto {
 struct Type {
     enum : uint16_t {
         EthernetFrame = ::p2p::ice::proto::Type::Limit,
-        EncKey,
 
         Limit,
     };
@@ -28,19 +27,7 @@ struct Type {
 struct EthernetFrame : ::p2p::proto::Packet {
     // std::byte data[];
 };
-
-struct EncKey : ::p2p::proto::Packet {
-    Key key;
-};
 } // namespace proto
-
-struct EventKind {
-    enum {
-        EncKeyReceived = p2p::plink::EventKind::Limit,
-
-        Limit,
-    };
-};
 
 class Session : public p2p::ice::IceSession {
   private:
@@ -51,10 +38,9 @@ class Session : public p2p::ice::IceSession {
     crypto::AutoCipherContext cipher_context;
     Key                       key;
 
-    bool ws_only      = false;
-    bool verbose      = false;
-    bool key_loaded   = false;
-    bool key_prepared = false;
+    bool ws_only    = false;
+    bool verbose    = false;
+    bool key_loaded = false;
 
     auto auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool override;
     auto on_pad_created() -> void override;
@@ -69,12 +55,6 @@ class Session : public p2p::ice::IceSession {
     auto start(Args args) -> bool;
     auto run() -> bool;
 };
-
-auto calc_xor(std::byte* const a, const std::byte* const b, const size_t len) -> void {
-    for(auto i = 0u; i < len; i += 1) {
-        a[i] ^= b[i];
-    }
-}
 
 auto engine = std::mt19937((std::random_device())());
 
@@ -105,20 +85,6 @@ auto Session::on_packet_received(const std::span<const std::byte> payload) -> bo
     unwrap_pb(header, p2p::proto::extract_header(payload));
 
     switch(header.type) {
-    case proto::Type::EncKey: {
-        assert_b(key_loaded);
-        unwrap_pb(packet, p2p::proto::extract_payload<proto::EncKey>(payload));
-
-        calc_xor(key.data(), packet.key.data(), key.size());
-        key_prepared = true;
-        if(verbose) {
-            print("received session key");
-        }
-        events.invoke(EventKind::EncKeyReceived, p2p::no_id, p2p::no_value);
-
-        send_result(p2p::proto::Type::Success, header.id);
-        return true;
-    }
     case proto::Type::EthernetFrame: {
         assert_b(process_received_ethernet_frame(payload.subspan(sizeof(proto::EthernetFrame))));
         send_result(p2p::proto::Type::Success, header.id);
@@ -176,13 +142,6 @@ auto Session::start(Args args) -> bool {
     unwrap_ob(dev, setup_tap_dev(local_addr, ws_only ? 1500 : 1300));
     this->dev = FileDescriptor(dev);
 
-    struct Events {
-        p2p::Event key;
-    };
-    auto events = std::shared_ptr<Events>(new Events());
-    if(!args.server && key_loaded) {
-        add_event_handler(EventKind::EncKeyReceived, [events](uint32_t) { events->key.notify(); });
-    }
     auto plink_user_cert = std::string();
     if(args.peer_linker_user_cert_path != nullptr) {
         unwrap_ob(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
@@ -205,19 +164,6 @@ auto Session::start(Args args) -> bool {
 
     if(!key_loaded) {
         warn("no private key provided\ncontinuing without encryption");
-        return true;
-    }
-
-    if(args.server) {
-        const auto session_key = generate_random_bytes<uint64_t, Key().size()>();
-        if(verbose) {
-            print("sending session key");
-        }
-        assert_b(send_packet(proto::Type::EncKey, session_key));
-        calc_xor(key.data(), session_key.data(), key.size());
-        key_prepared = true;
-    } else {
-        events->key.wait();
     }
 
     return true;
@@ -235,10 +181,6 @@ loop:
         const auto len = read(fds[0].fd, buf.data(), buf.size());
         if(verbose) {
             print("<<< ", len, " bytes");
-        }
-        if(key_loaded && !key_prepared) {
-            warn("encryption key not prepared yet");
-            goto loop;
         }
         assert_b(len > 0);
         auto payload   = std::span<std::byte>((std::byte*)buf.data(), size_t(len));
