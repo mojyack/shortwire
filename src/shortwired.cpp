@@ -3,6 +3,7 @@
 #include "args.hpp"
 #include "common.hpp"
 #include "crypto/aes.hpp"
+#include "crypto/c20p1305.hpp"
 #include "macros/unwrap.hpp"
 #include "p2p/ice-session-protocol.hpp"
 #include "p2p/ice-session.hpp"
@@ -13,7 +14,9 @@
 #include "util/span.hpp"
 
 namespace {
-using Key = std::array<std::byte, 32>;
+constexpr auto key_len = 32;
+static_assert(crypto::c20p1305::key_len == key_len);
+using Key = std::array<std::byte, key_len>;
 
 namespace proto {
 struct Type {
@@ -34,13 +37,13 @@ class Session : public p2p::ice::IceSession {
     std::string         username;
     FileDescriptor      dev;
     EventFileDescriptor stop;
+    EncMethod           enc_method = EncMethod::None;
 
     crypto::AutoCipherContext cipher_context;
     Key                       key;
 
-    bool ws_only    = false;
-    bool verbose    = false;
-    bool key_loaded = false;
+    bool ws_only = false;
+    bool verbose = false;
 
     auto auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool override;
     auto on_pad_created() -> void override;
@@ -48,7 +51,7 @@ class Session : public p2p::ice::IceSession {
     auto on_packet_received(std::span<const std::byte> payload) -> bool override;
     auto on_p2p_packet_received(std::span<const std::byte> payload) -> void override;
 
-    auto load_key(const char* key_path) -> bool;
+    auto load_key(const EncMethod enc_method, const char* key_path) -> bool;
     auto process_received_ethernet_frame(std::span<const std::byte> data) -> bool;
 
   public:
@@ -66,6 +69,19 @@ auto generate_random_bytes() -> std::array<std::byte, size> {
     for(auto i = 0u; i < size / sizeof(T); i += 1) {
         std::bit_cast<T*>(&ret)[i] = engine();
     }
+    return ret;
+}
+
+auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) -> std::array<std::span<const std::byte>, 2> {
+    const auto iv  = data.subspan(0, iv_len);
+    const auto enc = data.subspan(iv_len);
+    return {iv, enc};
+}
+
+auto concat(const std::span<const std::byte> a, const std::span<const std::byte> b) -> std::vector<std::byte> {
+    auto ret = std::vector<std::byte>(a.size() + b.size());
+    std::memcpy(ret.data(), a.data(), a.size());
+    std::memcpy(ret.data() + a.size(), b.data(), b.size());
     return ret;
 }
 
@@ -118,13 +134,23 @@ auto Session::process_received_ethernet_frame(std::span<const std::byte> data) -
         print(">>> ", data.size(), " bytes");
     }
     auto decrypted = std::vector<std::byte>();
-    if(key_loaded) {
+    switch(enc_method) {
+    case EncMethod::None:
+        break;
+    case EncMethod::AES: {
         assert_b(data.size() > crypto::aes::iv_len, "packet too short");
-        const auto iv  = data.subspan(0, crypto::aes::iv_len);
-        const auto enc = data.subspan(crypto::aes::iv_len);
+        const auto [iv, enc] = split_iv_enc(data, crypto::aes::iv_len);
         unwrap_ob_mut(dec, crypto::aes::decrypt(cipher_context.get(), key, iv, enc));
         decrypted = std::move(dec);
         data      = decrypted;
+    } break;
+    case EncMethod::C20P1305: {
+        assert_b(data.size() > crypto::c20p1305::iv_len, "packet too short");
+        const auto [iv, enc] = split_iv_enc(data, crypto::c20p1305::iv_len);
+        unwrap_ob_mut(dec, crypto::c20p1305::decrypt(cipher_context.get(), key, iv, enc));
+        decrypted = std::move(dec);
+        data      = decrypted;
+    } break;
     }
     assert_b(size_t(write(dev.as_handle(), data.data(), data.size())) == data.size(), strerror(errno));
     return true;
@@ -135,7 +161,7 @@ auto Session::start(Args args) -> bool {
     verbose  = args.verbose;
     ws_only  = args.ws_only;
     if(args.key_file != nullptr) {
-        assert_b(load_key(args.key_file));
+        assert_b(load_key(args.enc_method, args.key_file));
     }
 
     const auto local_addr = to_inet_addr(192, 168, args.subnet, args.server ? 1 : 2);
@@ -162,7 +188,7 @@ auto Session::start(Args args) -> bool {
         assert_b(p2p::ice::IceSession::start({{"stun.l.google.com", 19302}, {}}, plink_params));
     }
 
-    if(!key_loaded) {
+    if(enc_method == EncMethod::None) {
         warn("no private key provided\ncontinuing without encryption");
     }
 
@@ -183,21 +209,27 @@ loop:
             print("<<< ", len, " bytes");
         }
         assert_b(len > 0);
+
         auto payload   = std::span<std::byte>((std::byte*)buf.data(), size_t(len));
         auto encrypted = std::vector<std::byte>();
-        if(key_loaded) {
-            // generate iv
+        switch(enc_method) {
+        case EncMethod::None:
+            break;
+        case EncMethod::AES: {
             const auto iv = generate_random_bytes<uint64_t, crypto::aes::iv_len>();
-
-            // encrypt
             unwrap_ob_mut(enc, crypto::aes::encrypt(cipher_context.get(), key, iv, payload));
-
-            // build packet(iv+enc)
-            encrypted.resize(iv.size() + enc.size());
-            std::memcpy(encrypted.data(), iv.data(), iv.size());
-            std::memcpy(encrypted.data() + iv.size(), enc.data(), enc.size());
+            encrypted = concat(iv, enc);
+            payload   = encrypted;
+        } break;
+        case EncMethod::C20P1305: {
+            const auto iv = generate_random_bytes<uint64_t, crypto::c20p1305::iv_len>();
+            unwrap_ob_mut(enc, crypto::c20p1305::encrypt(cipher_context.get(), key, iv, payload));
+            encrypted = concat(iv, enc);
+            print("input ", payload.size(), " output ", encrypted.size());
             payload = encrypted;
+        } break;
         }
+
         if(ws_only) {
             send_packet_detached(
                 proto::Type::EthernetFrame, [](uint32_t result) {
@@ -214,12 +246,12 @@ loop:
     goto loop;
 }
 
-auto Session::load_key(const char* const key_path) -> bool {
+auto Session::load_key(const EncMethod enc_method, const char* const key_path) -> bool {
     unwrap_ob(key_b, read_file(key_path));
     assert_b(key_b.size() == key.size());
     std::memcpy(key.data(), key_b.data(), key.size());
     cipher_context.reset(crypto::alloc_cipher_context());
-    key_loaded = true;
+    this->enc_method = enc_method;
     return true;
 }
 
