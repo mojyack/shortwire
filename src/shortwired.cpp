@@ -12,7 +12,7 @@
 #include "util/span.hpp"
 
 namespace {
-using Key = std::array<std::byte, 16>;
+using Key = std::array<std::byte, 32>;
 
 namespace proto {
 struct Type {
@@ -75,12 +75,6 @@ auto calc_xor(std::byte* const a, const std::byte* const b, const size_t len) ->
     for(auto i = 0u; i < len; i += 1) {
         a[i] ^= b[i];
     }
-}
-
-auto generate_key() -> Key {
-    auto key = Key();
-    crypto::random::fill_by_random(key);
-    return key;
 }
 
 auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> /*secret*/) -> bool {
@@ -201,8 +195,9 @@ auto Session::start(Args args) -> bool {
     }
 
     if(args.server) {
-        iv                     = generate_key();
-        const auto session_key = generate_key();
+        auto session_key = Key();
+        crypto::random::fill_by_random(iv);
+        crypto::random::fill_by_random(session_key);
         if(verbose) {
             print("sending session key");
         }

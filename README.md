@@ -21,8 +21,8 @@ ninja -C build
 
 # Usage
 ## generate encryption key
-key length must be 16 bytes.  
-`dd if=/dev/random of=key.bin bs=16 count=1`  
+key length must be 32 bytes.  
+`dd if=/dev/random of=key.bin bs=32 count=1`  
 place the same key on the server and client side.
 
 ## start server
