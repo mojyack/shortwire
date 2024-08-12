@@ -37,6 +37,7 @@ sudo build/shortwired \
     --username $USER \
     --peer-linker-addr $PEER_LINKER \
     --peer-linker-cert var/user-cert.txt \
+    --encryption-method chacha20-poly1305 \
     --key key.bin \
     --server
 sleep 5
@@ -53,6 +54,7 @@ sudo build/shortwired \
     --username $USER \
     --peer-linker-addr $PEER_LINKER \
     --peer-linker-cert var/user-cert.txt \
+    --encryption-method chacha20-poly1305 \
     --key key.bin \
 sleep 5
 done
