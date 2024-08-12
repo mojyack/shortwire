@@ -6,6 +6,17 @@ minimal yet working VPN(virtual private network) daemon for Linux
 - creates a virtual NIC and allows any applications(ssh,nfs,http-server,...) to transparently use P2P connection
 - packets are encrypted of course
 
+# Performance
+Throughput between two PCs(Ryzen Threadripper 2920X and Xeon E5-2696) in the same LAN, wired across a router, measured with iperf3.  
+If the nodes are in the same LAN, shortwire detects this and only communicates within the LAN. Therefore, this result is not related to the internet speed of my environment, but represents pure software overhead.  
+
+Native(no shortwire) throughput: 871 Mbps  
+| Encryption method | Throughput(Mbps) |
+| ---- | ---- |
+| None | 601 |
+| AES | 590 |
+| ChaCha20-Poly1305 | 592 |
+
 # Install
 ## dependencies
 - libwebsockets
