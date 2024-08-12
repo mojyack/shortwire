@@ -1,7 +1,8 @@
+#include <random>
+
 #include "args.hpp"
 #include "common.hpp"
 #include "crypto/aes.hpp"
-#include "crypto/random.hpp"
 #include "macros/unwrap.hpp"
 #include "p2p/ice-session-protocol.hpp"
 #include "p2p/ice-session.hpp"
@@ -29,8 +30,7 @@ struct EthernetFrame : ::p2p::proto::Packet {
 };
 
 struct EncKey : ::p2p::proto::Packet {
-    crypto::aes::IV iv;
-    Key             key;
+    Key key;
 };
 } // namespace proto
 
@@ -48,7 +48,6 @@ class Session : public p2p::ice::IceSession {
     FileDescriptor      dev;
     EventFileDescriptor stop;
 
-    crypto::aes::IV           iv;
     crypto::AutoCipherContext cipher_context;
     Key                       key;
 
@@ -77,6 +76,19 @@ auto calc_xor(std::byte* const a, const std::byte* const b, const size_t len) ->
     }
 }
 
+auto engine = std::mt19937((std::random_device())());
+
+template <std::integral T, size_t size>
+auto generate_random_bytes() -> std::array<std::byte, size> {
+    static_assert(size % sizeof(T) == 0);
+
+    auto ret = std::array<std::byte, size>();
+    for(auto i = 0u; i < size / sizeof(T); i += 1) {
+        std::bit_cast<T*>(&ret)[i] = engine();
+    }
+    return ret;
+}
+
 auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> /*secret*/) -> bool {
     return peer_name.starts_with(build_string(username, "_")) && peer_name.ends_with("_client");
 }
@@ -97,7 +109,6 @@ auto Session::on_packet_received(const std::span<const std::byte> payload) -> bo
         assert_b(key_loaded);
         unwrap_pb(packet, p2p::proto::extract_payload<proto::EncKey>(payload));
 
-        iv = packet.iv;
         calc_xor(key.data(), packet.key.data(), key.size());
         key_prepared = true;
         if(verbose) {
@@ -142,7 +153,10 @@ auto Session::process_received_ethernet_frame(std::span<const std::byte> data) -
     }
     auto decrypted = std::vector<std::byte>();
     if(key_loaded) {
-        unwrap_ob_mut(dec, crypto::aes::decrypt(cipher_context.get(), key, iv, data));
+        assert_b(data.size() > crypto::aes::iv_len, "packet too short");
+        const auto iv  = data.subspan(0, crypto::aes::iv_len);
+        const auto enc = data.subspan(crypto::aes::iv_len);
+        unwrap_ob_mut(dec, crypto::aes::decrypt(cipher_context.get(), key, iv, enc));
         decrypted = std::move(dec);
         data      = decrypted;
     }
@@ -195,13 +209,11 @@ auto Session::start(Args args) -> bool {
     }
 
     if(args.server) {
-        auto session_key = Key();
-        crypto::random::fill_by_random(iv);
-        crypto::random::fill_by_random(session_key);
+        const auto session_key = generate_random_bytes<uint64_t, Key().size()>();
         if(verbose) {
             print("sending session key");
         }
-        assert_b(send_packet(proto::Type::EncKey, iv, session_key));
+        assert_b(send_packet(proto::Type::EncKey, session_key));
         calc_xor(key.data(), session_key.data(), key.size());
         key_prepared = true;
     } else {
@@ -232,9 +244,17 @@ loop:
         auto payload   = std::span<std::byte>((std::byte*)buf.data(), size_t(len));
         auto encrypted = std::vector<std::byte>();
         if(key_loaded) {
+            // generate iv
+            const auto iv = generate_random_bytes<uint64_t, crypto::aes::iv_len>();
+
+            // encrypt
             unwrap_ob_mut(enc, crypto::aes::encrypt(cipher_context.get(), key, iv, payload));
-            encrypted = std::move(enc);
-            payload   = encrypted;
+
+            // build packet(iv+enc)
+            encrypted.resize(iv.size() + enc.size());
+            std::memcpy(encrypted.data(), iv.data(), iv.size());
+            std::memcpy(encrypted.data() + iv.size(), enc.data(), enc.size());
+            payload = encrypted;
         }
         if(ws_only) {
             send_packet_detached(
