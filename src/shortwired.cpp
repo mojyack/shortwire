@@ -45,14 +45,17 @@ struct EventKind {
 class Session : public p2p::ice::IceSession {
   private:
     std::string         username;
-    crypto::aes::IV     iv;
-    Key                 key;
     FileDescriptor      dev;
     EventFileDescriptor stop;
-    bool                ws_only      = false;
-    bool                verbose      = false;
-    bool                key_loaded   = false;
-    bool                key_prepared = false;
+
+    crypto::aes::IV           iv;
+    crypto::AutoCipherContext cipher_context;
+    Key                       key;
+
+    bool ws_only      = false;
+    bool verbose      = false;
+    bool key_loaded   = false;
+    bool key_prepared = false;
 
     auto auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool override;
     auto on_pad_created() -> void override;
@@ -145,7 +148,7 @@ auto Session::process_received_ethernet_frame(std::span<const std::byte> data) -
     }
     auto decrypted = std::vector<std::byte>();
     if(key_loaded) {
-        unwrap_ob_mut(dec, crypto::aes::decrypt(key, iv, data));
+        unwrap_ob_mut(dec, crypto::aes::decrypt(cipher_context.get(), key, iv, data));
         decrypted = std::move(dec);
         data      = decrypted;
     }
@@ -234,7 +237,7 @@ loop:
         auto payload   = std::span<std::byte>((std::byte*)buf.data(), size_t(len));
         auto encrypted = std::vector<std::byte>();
         if(key_loaded) {
-            unwrap_ob_mut(enc, crypto::aes::encrypt(key, iv, payload));
+            unwrap_ob_mut(enc, crypto::aes::encrypt(cipher_context.get(), key, iv, payload));
             encrypted = std::move(enc);
             payload   = encrypted;
         }
@@ -258,6 +261,7 @@ auto Session::load_key(const char* const key_path) -> bool {
     unwrap_ob(key_b, read_file(key_path));
     assert_b(key_b.size() == key.size());
     std::memcpy(key.data(), key_b.data(), key.size());
+    cipher_context.reset(crypto::alloc_cipher_context());
     key_loaded = true;
     return true;
 }
