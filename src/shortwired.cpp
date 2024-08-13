@@ -1,5 +1,3 @@
-#include <random>
-
 #include "args.hpp"
 #include "common.hpp"
 #include "crypto/aes.hpp"
@@ -11,6 +9,7 @@
 #include "util/event-fd.hpp"
 #include "util/fd.hpp"
 #include "util/file-io.hpp"
+#include "util/random.hpp"
 #include "util/span.hpp"
 
 namespace {
@@ -39,6 +38,7 @@ class Session : public p2p::ice::IceSession {
     EventFileDescriptor stop;
     EncMethod           enc_method = EncMethod::None;
 
+    RandomEngine              random_engine;
     crypto::AutoCipherContext enc_context;
     crypto::AutoCipherContext dec_context;
     Key                       key;
@@ -59,19 +59,6 @@ class Session : public p2p::ice::IceSession {
     auto start(Args args) -> bool;
     auto run() -> bool;
 };
-
-auto engine = std::mt19937((std::random_device())());
-
-template <std::integral T, size_t size>
-auto generate_random_bytes() -> std::array<std::byte, size> {
-    static_assert(size % sizeof(T) == 0);
-
-    auto ret = std::array<std::byte, size>();
-    for(auto i = 0u; i < size / sizeof(T); i += 1) {
-        std::bit_cast<T*>(&ret)[i] = engine();
-    }
-    return ret;
-}
 
 auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) -> std::array<std::span<const std::byte>, 2> {
     const auto iv  = data.subspan(0, iv_len);
@@ -217,16 +204,16 @@ loop:
         case EncMethod::None:
             break;
         case EncMethod::AES: {
-            const auto iv = generate_random_bytes<uint64_t, crypto::aes::iv_len>();
+            const auto iv = random_engine.generate<crypto::aes::iv_len>();
             unwrap_ob_mut(enc, crypto::aes::encrypt(enc_context.get(), key, iv, payload));
             encrypted = concat(iv, enc);
             payload   = encrypted;
         } break;
         case EncMethod::C20P1305: {
-            const auto iv = generate_random_bytes<uint64_t, crypto::c20p1305::iv_len>();
+            const auto iv = random_engine.generate<crypto::c20p1305::iv_len>();
             unwrap_ob_mut(enc, crypto::c20p1305::encrypt(enc_context.get(), key, iv, payload));
             encrypted = concat(iv, enc);
-            payload = encrypted;
+            payload   = encrypted;
         } break;
         }
 
