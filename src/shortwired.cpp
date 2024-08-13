@@ -6,6 +6,7 @@
 #include "p2p/ice-session-protocol.hpp"
 #include "p2p/ice-session.hpp"
 #include "p2p/ws/misc.hpp"
+#include "util/concat.hpp"
 #include "util/event-fd.hpp"
 #include "util/fd.hpp"
 #include "util/file-io.hpp"
@@ -64,13 +65,6 @@ auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) ->
     const auto iv  = data.subspan(0, iv_len);
     const auto enc = data.subspan(iv_len);
     return {iv, enc};
-}
-
-auto concat(const std::span<const std::byte> a, const std::span<const std::byte> b) -> std::vector<std::byte> {
-    auto ret = std::vector<std::byte>(a.size() + b.size());
-    std::memcpy(ret.data(), a.data(), a.size());
-    std::memcpy(ret.data() + a.size(), b.data(), b.size());
-    return ret;
 }
 
 auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> /*secret*/) -> bool {
