@@ -31,8 +31,8 @@ struct Type {
 struct ServerParameters : ::p2p::proto::Packet {
     EncMethod enc_method;
     uint32_t  mtu;
-    bool      websocket_only;
-    bool      tap;
+    uint8_t   websocket_only;
+    uint8_t   tap;
 };
 
 struct EthernetFrame : ::p2p::proto::Packet {
@@ -177,6 +177,7 @@ auto Session::start(Args args) -> bool {
            .peer_linker_allow_self_signed = true,
     };
     assert_b(p2p::plink::PeerLinkerSession::start(plink_params));
+
     if(!ws_only) {
         assert_b(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
     }
