@@ -21,10 +21,18 @@ using Key = std::array<std::byte, key_len>;
 namespace proto {
 struct Type {
     enum : uint16_t {
-        EthernetFrame = ::p2p::ice::proto::Type::Limit,
+        ServerParameters = ::p2p::ice::proto::Type::Limit,
+        EthernetFrame,
 
         Limit,
     };
+};
+
+struct ServerParameters : ::p2p::proto::Packet {
+    EncMethod enc_method;
+    uint32_t  mtu;
+    bool      websocket_only;
+    bool      tap;
 };
 
 struct EthernetFrame : ::p2p::proto::Packet {
