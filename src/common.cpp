@@ -23,13 +23,13 @@ auto to_inet_addr(const char* const str) -> std::optional<uint32_t> {
     return ntohl(addr.s_addr);
 }
 
-auto setup_tap_dev(const VNICParams& params) -> std::optional<int> {
+auto setup_virtual_nic(const VNICParams& params) -> std::optional<int> {
     auto dev = FileDescriptor(open("/dev/net/tun", O_RDWR));
     assert_o(dev.as_handle() >= 0);
 
     // create device
     auto ifr      = ifreq();
-    ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
+    ifr.ifr_flags = (params.tap ? IFF_TAP : IFF_TUN) | IFF_NO_PI;
     strncpy(ifr.ifr_name, "tun%d", IFNAMSIZ);
     assert_o(ioctl(dev.as_handle(), TUNSETIFF, &ifr) == 0);
     print("interface created: ", ifr.ifr_name);
