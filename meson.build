@@ -14,3 +14,8 @@ executable('shortwired', files(
   ) + p2p_client_ice_files,
   dependencies : p2p_client_ice_deps + crypto_utils_deps,
   install : true)
+
+executable('tun-test', files(
+    'src/tun-test.cpp',
+    'src/common.cpp',
+  ))
