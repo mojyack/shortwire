@@ -22,18 +22,28 @@ auto to_string<EncMethod>(const EncMethod& data) -> std::string {
     return std::string(*enc_method_str.find(data));
 }
 } // namespace args
+
+auto parse_cidr(const char* const cidr) -> std::optional<std::array<uint32_t, 2>> {
+    auto a = uint8_t(), b = uint8_t(), c = uint8_t(), d = uint8_t(), m = uint8_t();
+    assert_o(sscanf(cidr, "%hhu.%hhu.%hhu.%hhu/%hhu", &a, &b, &c, &d, &m) == 5, "invalid cidr");
+    assert_o(m <= 32, "invalid mask");
+    const auto addr = uint32_t(a << 24 | b << 16 | c << 8 | d);
+    const auto mask = uint32_t(0xffffffff << (32 - m));
+    return std::array{addr, mask};
+}
 } // namespace
 
 auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args> {
+    auto cidr   = (const char*)(nullptr);
     auto args   = Args();
     auto parser = args::Parser<uint8_t, uint16_t, EncMethod>();
+    parser.kwarg(&cidr, {"-c", "--cidr"}, {"CIDR", "address and subnet-mask of the virtual nic"});
     parser.kwarg(&args.username, {"-u", "--username"}, {"USERNAME", "name to identify you from other users"});
     parser.kwarg(&args.peer_linker_addr, {"-pa", "--peer-linker-addr"}, {"HOSTNAME", "peer-linker address"});
     parser.kwarg(&args.peer_linker_port, {"-pp", "--peer-linker-port"}, {"PORT", "peer-linker port number", args::State::DefaultValue});
     parser.kwarg(&args.peer_linker_user_cert_path, {"-pc", "--peer-linker-cert"}, {"FILE", "peer-linker user certificate", args::State::Initialized});
     parser.kwarg(&args.enc_method, {"-e", "--encryption-method"}, {"none|aes|chacha20-poly1305", "encryption method to use", args::State::DefaultValue});
     parser.kwarg(&args.key_file, {"-k", "--key"}, {"FILE", "shared key for encryption", args::State::Initialized});
-    parser.kwarg(&args.subnet, {"-n", "--subnet"}, {"SUBNET", "x of 192.168.x.(1,2)", args::State::DefaultValue});
     parser.kwarg(&args.server, {"-s", "--server"}, {"", "act as a server", args::State::Initialized});
     parser.kwarg(&args.ws_only, {"-wo", "--websocket-only"}, {"", "do not use p2p connection", args::State::Initialized});
     parser.kwarg(&args.ws_only, {"-v"}, {"", "enable verbose output", args::State::Initialized});
@@ -42,6 +52,9 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
         print("usage: p2p-vpn ", parser.get_help());
         exit(0);
     }
+    unwrap_oo(parsed_cidr, parse_cidr(cidr));
+    args.address = parsed_cidr[0];
+    args.mask    = parsed_cidr[1];
     assert_o(args.enc_method == EncMethod::None || args.key_file != nullptr, "encryption enabled, but no key file specified");
     assert_o(args.enc_method != EncMethod::None || args.key_file == nullptr, "key file specified, but no encryption method set");
     return args;

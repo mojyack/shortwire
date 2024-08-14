@@ -68,7 +68,7 @@ auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) ->
 }
 
 auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> /*secret*/) -> bool {
-    return peer_name.starts_with(build_string(username, "_")) && peer_name.ends_with("_client");
+    return peer_name == build_string(username, "_client");
 }
 
 auto Session::on_pad_created() -> void {
@@ -146,10 +146,9 @@ auto Session::start(Args args) -> bool {
         assert_b(load_key(args.enc_method, args.key_file));
     }
 
-    const auto local_addr = to_inet_addr(192, 168, args.subnet, args.server ? 1 : 2);
     unwrap_ob(dev, setup_virtual_nic({
-                       .address = local_addr,
-                       .mask    = to_inet_addr(255, 255, 255, 0),
+                       .address = args.address,
+                       .mask    = args.mask,
                        .mtu     = ws_only ? 1500u : 1300u,
                        .tap     = true,
                    }));
@@ -160,8 +159,8 @@ auto Session::start(Args args) -> bool {
         unwrap_ob(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
         plink_user_cert = from_span(cert);
     }
-    const auto server_pad_name = build_string(username, "_subnet-", int(args.subnet), "_server");
-    const auto client_pad_name = build_string(username, "_subnet-", int(args.subnet), "_client");
+    const auto server_pad_name = build_string(username, "_server");
+    const auto client_pad_name = build_string(username, "_client");
     const auto plink_params    = p2p::plink::PeerLinkerSessionParams{
            .peer_linker                   = p2p::wss::ServerLocation{args.peer_linker_addr, args.peer_linker_port},
            .pad_name                      = args.server ? server_pad_name : client_pad_name,
