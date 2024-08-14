@@ -176,10 +176,9 @@ auto Session::start(Args args) -> bool {
            .user_certificate              = plink_user_cert,
            .peer_linker_allow_self_signed = true,
     };
-    if(ws_only) {
-        assert_b(p2p::plink::PeerLinkerSession::start(plink_params));
-    } else {
-        assert_b(p2p::ice::IceSession::start({{"stun.l.google.com", 19302}, {}}, plink_params));
+    assert_b(p2p::plink::PeerLinkerSession::start(plink_params));
+    if(!ws_only) {
+        assert_b(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
     }
 
     if(enc_method == EncMethod::None) {
