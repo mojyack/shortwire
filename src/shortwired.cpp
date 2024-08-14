@@ -30,7 +30,7 @@ struct Type {
 
 struct ServerParameters : ::p2p::proto::Packet {
     EncMethod enc_method;
-    uint32_t  mtu;
+    uint16_t  mtu;
     uint8_t   websocket_only;
     uint8_t   tap;
 };
@@ -40,9 +40,17 @@ struct EthernetFrame : ::p2p::proto::Packet {
 };
 } // namespace proto
 
+struct EventKind {
+    enum {
+        ServerParameters = p2p::ice::EventKind::Limit,
+
+        Limit,
+    };
+};
+
 class Session : public p2p::ice::IceSession {
   private:
-    std::string         username;
+    Args                args;
     FileDescriptor      dev;
     EventFileDescriptor stop;
     EncMethod           enc_method = EncMethod::None;
@@ -51,9 +59,6 @@ class Session : public p2p::ice::IceSession {
     crypto::AutoCipherContext enc_context;
     crypto::AutoCipherContext dec_context;
     Key                       key;
-
-    bool ws_only = false;
-    bool verbose = false;
 
     auto auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool override;
     auto on_pad_created() -> void override;
@@ -65,8 +70,10 @@ class Session : public p2p::ice::IceSession {
     auto process_received_ethernet_frame(std::span<const std::byte> data) -> bool;
 
   public:
-    auto start(Args args) -> bool;
+    auto start() -> bool;
     auto run() -> bool;
+
+    Session(Args args);
 };
 
 auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) -> std::array<std::span<const std::byte>, 2> {
@@ -76,7 +83,7 @@ auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) ->
 }
 
 auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> /*secret*/) -> bool {
-    return peer_name == build_string(username, "_client");
+    return peer_name == build_string(args.username, "_client");
 }
 
 auto Session::on_pad_created() -> void {
@@ -91,13 +98,23 @@ auto Session::on_packet_received(const std::span<const std::byte> payload) -> bo
     unwrap_pb(header, p2p::proto::extract_header(payload));
 
     switch(header.type) {
+    case proto::Type::ServerParameters: {
+        unwrap_pb(packet, p2p::proto::extract_payload<proto::ServerParameters>(payload));
+        args.enc_method = packet.enc_method;
+        args.mtu        = packet.mtu;
+        args.ws_only    = packet.websocket_only;
+        args.tap        = packet.tap;
+        send_result(p2p::proto::Type::Success, header.id);
+        events.invoke(EventKind::ServerParameters, p2p::no_id, p2p::no_value);
+        return true;
+    }
     case proto::Type::EthernetFrame: {
         assert_b(process_received_ethernet_frame(payload.subspan(sizeof(proto::EthernetFrame))));
         send_result(p2p::proto::Type::Success, header.id);
         return true;
     }
     default:
-        if(ws_only) {
+        if(args.ws_only) {
             return p2p::plink::PeerLinkerSession::on_packet_received(payload);
         } else {
             return p2p::ice::IceSession::on_packet_received(payload);
@@ -146,10 +163,7 @@ auto Session::process_received_ethernet_frame(std::span<const std::byte> data) -
     return true;
 }
 
-auto Session::start(Args args) -> bool {
-    username = args.username;
-    verbose  = args.verbose;
-    ws_only  = args.ws_only;
+auto Session::start() -> bool {
     if(args.key_file != nullptr) {
         assert_b(load_key(args.enc_method, args.key_file));
     }
@@ -159,8 +173,8 @@ auto Session::start(Args args) -> bool {
         unwrap_ob(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
         plink_user_cert = from_span(cert);
     }
-    const auto server_pad_name = build_string(username, "_server");
-    const auto client_pad_name = build_string(username, "_client");
+    const auto server_pad_name = build_string(args.username, "_server");
+    const auto client_pad_name = build_string(args.username, "_client");
     const auto plink_params    = p2p::plink::PeerLinkerSessionParams{
            .peer_linker                   = p2p::wss::ServerLocation{args.peer_linker_addr, args.peer_linker_port},
            .pad_name                      = args.server ? server_pad_name : client_pad_name,
@@ -168,10 +182,25 @@ auto Session::start(Args args) -> bool {
            .user_certificate              = plink_user_cert,
            .peer_linker_allow_self_signed = true,
     };
+
+    struct Events {
+        p2p::Event server_params;
+    };
+    auto events = std::shared_ptr<Events>(new Events());
     if(args.server) {
         print("waiting for client");
+    } else {
+        add_event_handler(EventKind::ServerParameters, [events](uint32_t) { events->server_params.notify(); });
     }
     assert_b(p2p::plink::PeerLinkerSession::start(plink_params));
+
+    if(args.server) {
+        assert_b(send_packet(proto::Type::ServerParameters, int(enc_method), uint32_t(args.mtu), uint8_t(args.ws_only), uint8_t(args.tap)));
+    } else {
+        events->server_params.wait();
+        assert_b(is_connected());
+    }
+
     unwrap_ob(dev, setup_virtual_nic({
                        .address = args.address,
                        .mask    = args.mask,
@@ -180,7 +209,7 @@ auto Session::start(Args args) -> bool {
                    }));
     this->dev = FileDescriptor(dev);
 
-    if(!ws_only) {
+    if(!args.ws_only) {
         assert_b(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
     }
 
@@ -225,7 +254,7 @@ loop:
         } break;
         }
 
-        if(ws_only) {
+        if(args.ws_only) {
             send_packet_detached(
                 proto::Type::EthernetFrame, [](uint32_t result) {
                     assert_n(result);
@@ -251,14 +280,18 @@ auto Session::load_key(const EncMethod enc_method, const char* const key_path) -
     return true;
 }
 
+Session::Session(Args args)
+    : args(args) {
+}
+
 auto run(const int argc, const char* const argv[]) -> bool {
     unwrap_ob(args, Args::parse(argc, argv));
 
     ws::set_log_level(0b11);
     // juice_set_log_level(JUICE_LOG_LEVEL_INFO);
-    auto session = Session();
+    auto session = Session(args);
     session.set_ws_debug_flags(false, false);
-    assert_b(session.start(args));
+    assert_b(session.start());
     print("ready");
     assert_b(session.run());
     return true;
