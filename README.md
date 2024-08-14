@@ -46,6 +46,7 @@ sudo modprobe tun
 while true; do
 sudo build/shortwired \
     --username $USER \
+    --cidr 192.168.2.1/24 \
     --peer-linker-addr $PEER_LINKER \
     --peer-linker-cert var/user-cert.txt \
     --encryption-method chacha20-poly1305 \
@@ -63,6 +64,7 @@ sudo modprobe tun
 while true; do
 sudo build/shortwired \
     --username $USER \
+    --cidr 192.168.2.2/24 \
     --peer-linker-addr $PEER_LINKER \
     --peer-linker-cert var/user-cert.txt \
     --encryption-method chacha20-poly1305 \
