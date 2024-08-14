@@ -154,14 +154,6 @@ auto Session::start(Args args) -> bool {
         assert_b(load_key(args.enc_method, args.key_file));
     }
 
-    unwrap_ob(dev, setup_virtual_nic({
-                       .address = args.address,
-                       .mask    = args.mask,
-                       .mtu     = args.mtu,
-                       .tap     = args.tap,
-                   }));
-    this->dev = FileDescriptor(dev);
-
     auto plink_user_cert = std::string();
     if(args.peer_linker_user_cert_path != nullptr) {
         unwrap_ob(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
@@ -176,7 +168,17 @@ auto Session::start(Args args) -> bool {
            .user_certificate              = plink_user_cert,
            .peer_linker_allow_self_signed = true,
     };
+    if(args.server) {
+        print("waiting for client");
+    }
     assert_b(p2p::plink::PeerLinkerSession::start(plink_params));
+    unwrap_ob(dev, setup_virtual_nic({
+                       .address = args.address,
+                       .mask    = args.mask,
+                       .mtu     = args.mtu,
+                       .tap     = args.tap,
+                   }));
+    this->dev = FileDescriptor(dev);
 
     if(!ws_only) {
         assert_b(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
