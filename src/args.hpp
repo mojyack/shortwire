@@ -19,6 +19,7 @@ struct Args {
     uint16_t    peer_linker_port = 8080;
     bool        verbose          = false;
     bool        server           = false;
+    bool        tap              = false;
     bool        ws_only          = false;
     bool        help             = false;
 

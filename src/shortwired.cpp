@@ -150,7 +150,7 @@ auto Session::start(Args args) -> bool {
                        .address = args.address,
                        .mask    = args.mask,
                        .mtu     = ws_only ? 1500u : 1300u,
-                       .tap     = true,
+                       .tap     = args.tap,
                    }));
     this->dev = FileDescriptor(dev);
 

@@ -45,6 +45,7 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
     parser.kwarg(&args.enc_method, {"-e", "--encryption-method"}, {"none|aes|chacha20-poly1305", "encryption method to use", args::State::DefaultValue});
     parser.kwarg(&args.key_file, {"-k", "--key"}, {"FILE", "shared key for encryption", args::State::Initialized});
     parser.kwarg(&args.server, {"-s", "--server"}, {"", "act as a server", args::State::Initialized});
+    parser.kwarg(&args.tap, {"-t", "--tap"}, {"", "use tap device instead of tun", args::State::Initialized});
     parser.kwarg(&args.ws_only, {"-wo", "--websocket-only"}, {"", "do not use p2p connection", args::State::Initialized});
     parser.kwarg(&args.ws_only, {"-v"}, {"", "enable verbose output", args::State::Initialized});
     parser.kwarg(&args.help, {"-h", "--help"}, {.arg_desc = "print this help message", .state = args::State::Initialized, .no_error_check = true});
