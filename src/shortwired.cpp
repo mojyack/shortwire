@@ -149,7 +149,7 @@ auto Session::start(Args args) -> bool {
     unwrap_ob(dev, setup_virtual_nic({
                        .address = args.address,
                        .mask    = args.mask,
-                       .mtu     = ws_only ? 1500u : 1300u,
+                       .mtu     = args.mtu,
                        .tap     = args.tap,
                    }));
     this->dev = FileDescriptor(dev);
