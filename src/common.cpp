@@ -23,7 +23,7 @@ auto to_inet_addr(const char* const str) -> std::optional<uint32_t> {
     return ntohl(addr.s_addr);
 }
 
-auto setup_tap_dev(const uint32_t address, const uint16_t mtu) -> std::optional<int> {
+auto setup_tap_dev(const VNICParams& params) -> std::optional<int> {
     auto dev = FileDescriptor(open("/dev/net/tun", O_RDWR));
     assert_o(dev.as_handle() >= 0);
 
@@ -39,15 +39,15 @@ auto setup_tap_dev(const uint32_t address, const uint16_t mtu) -> std::optional<
 
     // set address
     ifr.ifr_addr.sa_family                         = AF_INET;
-    ((sockaddr_in*)&ifr.ifr_addr)->sin_addr.s_addr = htonl(address);
+    ((sockaddr_in*)&ifr.ifr_addr)->sin_addr.s_addr = htonl(params.address);
     assert_o(ioctl(sock.as_handle(), SIOCSIFADDR, &ifr) == 0, strerror(errno));
 
     // set address mask
-    ((sockaddr_in*)&ifr.ifr_addr)->sin_addr.s_addr = htonl(to_inet_addr(255, 255, 255, 0));
+    ((sockaddr_in*)&ifr.ifr_addr)->sin_addr.s_addr = htonl(params.mask);
     assert_o(ioctl(sock.as_handle(), SIOCSIFNETMASK, &ifr) == 0);
 
     // set mtu
-    ifr.ifr_mtu = mtu;
+    ifr.ifr_mtu = params.mtu;
     assert_o(ioctl(sock.as_handle(), SIOCSIFMTU, &ifr) == 0);
 
     // set flag

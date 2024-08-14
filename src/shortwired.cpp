@@ -147,7 +147,11 @@ auto Session::start(Args args) -> bool {
     }
 
     const auto local_addr = to_inet_addr(192, 168, args.subnet, args.server ? 1 : 2);
-    unwrap_ob(dev, setup_tap_dev(local_addr, ws_only ? 1500 : 1300));
+    unwrap_ob(dev, setup_tap_dev({
+                       .address = local_addr,
+                       .mask    = to_inet_addr(255, 255, 255, 0),
+                       .mtu     = ws_only ? 1500u : 1300u,
+                   }));
     this->dev = FileDescriptor(dev);
 
     auto plink_user_cert = std::string();
