@@ -245,6 +245,7 @@ auto run(const int argc, const char* const argv[]) -> bool {
     unwrap_ob(args, Args::parse(argc, argv));
 
     ws::set_log_level(0b11);
+    // juice_set_log_level(JUICE_LOG_LEVEL_INFO);
     auto session = Session();
     session.set_ws_debug_flags(false, false);
     assert_b(session.start(args));
