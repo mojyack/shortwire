@@ -210,7 +210,7 @@ auto Session::start() -> bool {
     assert_b(p2p::plink::PeerLinkerSession::start(plink_params));
 
     if(args.server) {
-        assert_b(send_packet(proto::Type::ServerParameters, int(enc_method), uint32_t(args.mtu), uint8_t(args.ws_only), uint8_t(args.tap)));
+        assert_b(send_packet(proto::Type::ServerParameters, int(enc_method), uint16_t(args.mtu), uint8_t(args.ws_only), uint8_t(args.tap)));
     } else {
         assert_b(wait_for_event(EventKind::ServerParameters));
     }
