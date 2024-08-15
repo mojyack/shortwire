@@ -54,7 +54,6 @@ class Session : public p2p::ice::IceSession {
     Args                args;
     FileDescriptor      dev;
     EventFileDescriptor stop;
-    EncMethod           enc_method = EncMethod::None;
 
     RandomEngine              random_engine;
     crypto::AutoCipherContext enc_context;
@@ -67,7 +66,6 @@ class Session : public p2p::ice::IceSession {
     auto on_packet_received(std::span<const std::byte> payload) -> bool override;
     auto on_p2p_packet_received(std::span<const std::byte> payload) -> void override;
 
-    auto load_key(const EncMethod enc_method, const char* key_path) -> bool;
     auto process_received_ethernet_frame(std::span<const std::byte> data) -> bool;
     auto send_packet_p2p_retry(std::span<const std::byte> payload) -> bool;
 
@@ -145,7 +143,7 @@ auto Session::process_received_ethernet_frame(std::span<const std::byte> data) -
         print(">>> ", data.size(), " bytes");
     }
     auto decrypted = std::vector<std::byte>();
-    switch(enc_method) {
+    switch(args.enc_method) {
     case EncMethod::None:
         break;
     case EncMethod::AES: {
@@ -185,7 +183,9 @@ loop:
 
 auto Session::start() -> bool {
     if(args.key_file != nullptr) {
-        assert_b(load_key(args.enc_method, args.key_file));
+        unwrap_ob(key_b, read_file(args.key_file));
+        assert_b(key_b.size() == key.size());
+        std::memcpy(key.data(), key_b.data(), key.size());
     }
 
     auto plink_user_cert = std::string();
@@ -209,9 +209,15 @@ auto Session::start() -> bool {
     assert_b(p2p::plink::PeerLinkerSession::start(plink_params));
 
     if(args.server) {
-        assert_b(send_packet(proto::Type::ServerParameters, int(enc_method), uint16_t(args.mtu), uint8_t(args.ws_only), uint8_t(args.tap)));
+        assert_b(send_packet(proto::Type::ServerParameters, int(args.enc_method), uint16_t(args.mtu), uint8_t(args.ws_only), uint8_t(args.tap)));
     } else {
         assert_b(wait_for_event(EventKind::ServerParameters));
+    }
+    if(args.enc_method != EncMethod::None) {
+        enc_context.reset(crypto::alloc_cipher_context());
+        dec_context.reset(crypto::alloc_cipher_context());
+    } else {
+        warn("no private key provided, continuing without encryption");
     }
 
     unwrap_ob(dev, setup_virtual_nic({
@@ -241,10 +247,6 @@ auto Session::start() -> bool {
         print("mtu adjusted to ", mtu);
     }
 
-    if(enc_method == EncMethod::None) {
-        warn("no private key provided\ncontinuing without encryption");
-    }
-
     return true;
 }
 
@@ -265,7 +267,7 @@ loop:
 
         auto payload   = std::span<std::byte>((std::byte*)buf.data(), size_t(len));
         auto encrypted = std::vector<std::byte>();
-        switch(enc_method) {
+        switch(args.enc_method) {
         case EncMethod::None:
             break;
         case EncMethod::AES: {
@@ -292,16 +294,6 @@ loop:
         return true;
     }
     goto loop;
-}
-
-auto Session::load_key(const EncMethod enc_method, const char* const key_path) -> bool {
-    unwrap_ob(key_b, read_file(key_path));
-    assert_b(key_b.size() == key.size());
-    std::memcpy(key.data(), key_b.data(), key.size());
-    enc_context.reset(crypto::alloc_cipher_context());
-    dec_context.reset(crypto::alloc_cipher_context());
-    this->enc_method = enc_method;
-    return true;
 }
 
 Session::Session(Args args)
