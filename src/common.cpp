@@ -57,3 +57,16 @@ auto setup_virtual_nic(const VNICParams& params) -> std::optional<int> {
 
     return dev.release();
 }
+
+auto change_mtu(const int dev, const int diff) -> bool {
+    auto ifr = ifreq();
+    assert_b(ioctl(dev, TUNGETIFF, &ifr) == 0);
+
+    const auto sock = FileDescriptor(socket(AF_INET, SOCK_DGRAM, 0));
+    assert_b(ioctl(sock.as_handle(), SIOCGIFMTU, &ifr) == 0);
+    ifr.ifr_mtu += diff;
+    assert_b(ioctl(sock.as_handle(), SIOCSIFMTU, &ifr) == 0);
+    print("mtu changed to ", ifr.ifr_mtu);
+
+    return true;
+}

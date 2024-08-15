@@ -23,6 +23,7 @@ struct Type {
     enum : uint16_t {
         ServerParameters = ::p2p::ice::proto::Type::Limit,
         EthernetFrame,
+        Nop,
 
         Limit,
     };
