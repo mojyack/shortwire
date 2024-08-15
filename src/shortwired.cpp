@@ -240,25 +240,27 @@ auto Session::start() -> bool {
                    }));
     this->dev = FileDescriptor(dev);
 
-    if(!args.ws_only) {
-        assert_b(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
-
-        print("adjusting mtu");
-        juice_set_log_level(JUICE_LOG_LEVEL_ERROR); // supress logs to preserve errno inside libjuice
-        unwrap_ob_mut(mtu, get_mtu(dev));
-        const auto overhead = get_packet_overhead(args);
-        const auto buf      = std::vector<std::byte>(mtu + overhead);
-        while(mtu > 500) {
-            if(send_packet_p2p_retry(p2p::proto::build_packet(proto::Type::Nop, 0, std::span{buf.data(), mtu + overhead}))) {
-                break;
-            }
-            assert_b(errno == EMSGSIZE, errno, " ", strerror(errno));
-            mtu -= 1;
-            assert_b(set_mtu(dev, mtu));
-        }
-        juice_set_log_level(JUICE_LOG_LEVEL_WARN);
-        print("mtu adjusted to ", mtu);
+    if(args.ws_only) {
+        return true;
     }
+
+    assert_b(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
+
+    print("adjusting mtu");
+    juice_set_log_level(JUICE_LOG_LEVEL_ERROR); // supress logs to preserve errno inside libjuice
+    unwrap_ob_mut(mtu, get_mtu(dev));
+    const auto overhead = get_packet_overhead(args);
+    const auto buffer   = std::vector<std::byte>(mtu + overhead);
+    while(mtu > 500) {
+        if(send_packet_p2p_retry(p2p::proto::build_packet(proto::Type::Nop, 0, std::span{buffer.data(), mtu + overhead}))) {
+            break;
+        }
+        assert_b(errno == EMSGSIZE, errno, " ", strerror(errno));
+        mtu -= 1;
+        assert_b(set_mtu(dev, mtu));
+    }
+    juice_set_log_level(JUICE_LOG_LEVEL_WARN);
+    print("mtu adjusted to ", mtu);
 
     return true;
 }
