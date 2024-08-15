@@ -183,22 +183,15 @@ auto Session::start() -> bool {
            .peer_linker_allow_self_signed = true,
     };
 
-    struct Events {
-        p2p::Event server_params;
-    };
-    auto events = std::shared_ptr<Events>(new Events());
     if(args.server) {
         print("waiting for client");
-    } else {
-        add_event_handler(EventKind::ServerParameters, [events](uint32_t) { events->server_params.notify(); });
     }
     assert_b(p2p::plink::PeerLinkerSession::start(plink_params));
 
     if(args.server) {
         assert_b(send_packet(proto::Type::ServerParameters, int(enc_method), uint32_t(args.mtu), uint8_t(args.ws_only), uint8_t(args.tap)));
     } else {
-        events->server_params.wait();
-        assert_b(is_connected());
+        assert_b(wait_for_event(proto::Type::ServerParameters));
     }
 
     unwrap_ob(dev, setup_virtual_nic({
