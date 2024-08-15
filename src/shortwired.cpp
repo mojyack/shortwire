@@ -83,7 +83,7 @@ auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) ->
 }
 
 auto get_packet_overhead(const Args& args) -> size_t {
-    auto header_len = args.tap ? 14 : 0;
+    const auto header_len = args.tap ? 14 : 0;
     switch(args.enc_method) {
     case EncMethod::None:
         return header_len;
