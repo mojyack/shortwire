@@ -82,6 +82,18 @@ auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) ->
     return {iv, enc};
 }
 
+auto get_packet_overhead(const Args& args) -> size_t {
+    auto header_len = args.tap ? 14 : 0;
+    switch(args.enc_method) {
+    case EncMethod::None:
+        return header_len;
+    case EncMethod::AES:
+        return header_len + crypto::aes::iv_len + crypto::aes::block_len; // +block_len is worst case
+    case EncMethod::C20P1305:
+        return header_len + crypto::c20p1305::iv_len + crypto::c20p1305::tag_len;
+    }
+}
+
 auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> /*secret*/) -> bool {
     return peer_name == build_string(args.username, "_client");
 }
@@ -234,13 +246,14 @@ auto Session::start() -> bool {
         print("adjusting mtu");
         juice_set_log_level(JUICE_LOG_LEVEL_ERROR); // supress logs to preserve errno inside libjuice
         unwrap_ob_mut(mtu, get_mtu(dev));
-        const auto buf = std::vector<std::byte>(mtu);
+        const auto overhead = get_packet_overhead(args);
+        const auto buf      = std::vector<std::byte>(mtu + overhead);
         while(mtu > 500) {
-            if(send_packet_p2p_retry(p2p::proto::build_packet(proto::Type::Nop, 0, std::span{buf.data(), mtu}))) {
+            if(send_packet_p2p_retry(p2p::proto::build_packet(proto::Type::Nop, 0, std::span{buf.data(), mtu + overhead}))) {
                 break;
             }
             assert_b(errno == EMSGSIZE, errno, " ", strerror(errno));
-            mtu -= 10;
+            mtu -= 1;
             assert_b(set_mtu(dev, mtu));
         }
         juice_set_log_level(JUICE_LOG_LEVEL_WARN);
