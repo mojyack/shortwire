@@ -191,7 +191,7 @@ auto Session::start() -> bool {
     if(args.server) {
         assert_b(send_packet(proto::Type::ServerParameters, int(enc_method), uint32_t(args.mtu), uint8_t(args.ws_only), uint8_t(args.tap)));
     } else {
-        assert_b(wait_for_event(proto::Type::ServerParameters));
+        assert_b(wait_for_event(EventKind::ServerParameters));
     }
 
     unwrap_ob(dev, setup_virtual_nic({
