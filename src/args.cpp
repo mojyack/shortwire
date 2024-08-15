@@ -57,7 +57,7 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
     unwrap_oo(parsed_cidr, parse_cidr(cidr));
     args.address = parsed_cidr[0];
     args.mask    = parsed_cidr[1];
-    assert_o(args.enc_method == EncMethod::None || args.key_file != nullptr, "encryption enabled, but no key file specified");
-    assert_o(args.enc_method != EncMethod::None || args.key_file == nullptr, "key file specified, but no encryption method set");
+    assert_o(!args.server || args.enc_method == EncMethod::None || args.key_file != nullptr, "encryption enabled, but no key file specified");
+    assert_o(!args.server || args.enc_method != EncMethod::None || args.key_file == nullptr, "key file specified, but no encryption method set");
     return args;
 }
