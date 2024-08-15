@@ -66,7 +66,7 @@ class Session : public p2p::ice::IceSession {
     auto on_packet_received(std::span<const std::byte> payload) -> bool override;
     auto on_p2p_packet_received(std::span<const std::byte> payload) -> void override;
 
-    auto process_received_ethernet_frame(std::span<const std::byte> data) -> bool;
+    auto process_received_datagram(std::span<const std::byte> data) -> bool;
     auto send_packet_p2p_retry(std::span<const std::byte> payload) -> bool;
 
   public:
@@ -121,7 +121,7 @@ auto Session::on_packet_received(const std::span<const std::byte> payload) -> bo
         return true;
     }
     case proto::Type::Datagram: {
-        assert_b(process_received_ethernet_frame(payload.subspan(sizeof(proto::Datagram))));
+        assert_b(process_received_datagram(payload.subspan(sizeof(proto::Datagram))));
         return true;
     }
     default:
@@ -138,7 +138,7 @@ auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void
 
     switch(header.type) {
     case proto::Type::Datagram: {
-        assert_n(process_received_ethernet_frame(payload.subspan(sizeof(proto::Datagram))));
+        assert_n(process_received_datagram(payload.subspan(sizeof(proto::Datagram))));
         return;
     }
     case proto::Type::Nop: {
@@ -150,7 +150,7 @@ auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void
     }
 }
 
-auto Session::process_received_ethernet_frame(std::span<const std::byte> data) -> bool {
+auto Session::process_received_datagram(std::span<const std::byte> data) -> bool {
     if(verbose) {
         print(">>> ", data.size(), " bytes");
     }
