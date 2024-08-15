@@ -22,7 +22,7 @@ namespace proto {
 struct Type {
     enum : uint16_t {
         ServerParameters = ::p2p::ice::proto::Type::Limit,
-        EthernetFrame,
+        Datagram,
         Nop,
 
         Limit,
@@ -36,7 +36,7 @@ struct ServerParameters : ::p2p::proto::Packet {
     uint8_t   tap;
 };
 
-struct EthernetFrame : ::p2p::proto::Packet {
+struct Datagram : ::p2p::proto::Packet {
     // std::byte data[];
 };
 } // namespace proto
@@ -120,8 +120,8 @@ auto Session::on_packet_received(const std::span<const std::byte> payload) -> bo
         events.invoke(EventKind::ServerParameters, p2p::no_id, p2p::no_value);
         return true;
     }
-    case proto::Type::EthernetFrame: {
-        assert_b(process_received_ethernet_frame(payload.subspan(sizeof(proto::EthernetFrame))));
+    case proto::Type::Datagram: {
+        assert_b(process_received_ethernet_frame(payload.subspan(sizeof(proto::Datagram))));
         return true;
     }
     default:
@@ -137,8 +137,8 @@ auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void
     unwrap_pn(header, p2p::proto::extract_header(payload));
 
     switch(header.type) {
-    case proto::Type::EthernetFrame: {
-        assert_n(process_received_ethernet_frame(payload.subspan(sizeof(proto::EthernetFrame))));
+    case proto::Type::Datagram: {
+        assert_n(process_received_ethernet_frame(payload.subspan(sizeof(proto::Datagram))));
         return;
     }
     case proto::Type::Nop: {
@@ -298,9 +298,9 @@ loop:
         }
 
         if(args.ws_only) {
-            send_generic_packet(proto::Type::EthernetFrame, 0, payload);
+            send_generic_packet(proto::Type::Datagram, 0, payload);
         } else {
-            send_packet_p2p(p2p::proto::build_packet(proto::Type::EthernetFrame, 0, payload));
+            send_packet_p2p(p2p::proto::build_packet(proto::Type::Datagram, 0, payload));
         }
     }
     if(fds[1].revents & POLLIN) {
