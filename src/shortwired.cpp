@@ -69,6 +69,7 @@ class Session : public p2p::ice::IceSession {
 
     auto load_key(const EncMethod enc_method, const char* key_path) -> bool;
     auto process_received_ethernet_frame(std::span<const std::byte> data) -> bool;
+    auto send_packet_p2p_retry(std::span<const std::byte> payload) -> bool;
 
   public:
     auto start() -> bool;
@@ -131,6 +132,9 @@ auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void
         assert_n(process_received_ethernet_frame(payload.subspan(sizeof(proto::EthernetFrame))));
         return;
     }
+    case proto::Type::Nop: {
+        return;
+    }
     default:
         WARN("unknown packet type");
         return;
@@ -162,6 +166,22 @@ auto Session::process_received_ethernet_frame(std::span<const std::byte> data) -
     }
     assert_b(size_t(write(dev.as_handle(), data.data(), data.size())) == data.size(), strerror(errno));
     return true;
+}
+
+auto Session::send_packet_p2p_retry(const std::span<const std::byte> payload) -> bool {
+loop:
+    if(send_packet_p2p(payload)) {
+        return true;
+    }
+    switch(errno) {
+    case EMSGSIZE:
+        return false;
+    case EAGAIN:
+        std::this_thread::yield();
+        goto loop;
+    default:
+        assert_b(false, errno, " ", strerror(errno));
+    }
 }
 
 auto Session::start() -> bool {
@@ -205,6 +225,21 @@ auto Session::start() -> bool {
 
     if(!args.ws_only) {
         assert_b(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
+
+        print("adjusting mtu");
+        juice_set_log_level(JUICE_LOG_LEVEL_ERROR); // supress logs to preserve errno inside libjuice
+        unwrap_ob_mut(mtu, get_mtu(dev));
+        const auto buf = std::vector<std::byte>(mtu);
+        while(mtu > 500) {
+            if(send_packet_p2p_retry(p2p::proto::build_packet(proto::Type::Nop, 0, std::span{buf.data(), mtu}))) {
+                break;
+            }
+            assert_b(errno == EMSGSIZE, errno, " ", strerror(errno));
+            mtu -= 10;
+            assert_b(set_mtu(dev, mtu));
+        }
+        juice_set_log_level(JUICE_LOG_LEVEL_WARN);
+        print("mtu adjusted to ", mtu);
     }
 
     if(enc_method == EncMethod::None) {
