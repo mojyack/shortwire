@@ -112,7 +112,6 @@ auto Session::on_packet_received(const std::span<const std::byte> payload) -> bo
     }
     case proto::Type::EthernetFrame: {
         assert_b(process_received_ethernet_frame(payload.subspan(sizeof(proto::EthernetFrame))));
-        send_result(p2p::proto::Type::Success, header.id);
         return true;
     }
     default:
@@ -284,11 +283,7 @@ loop:
         }
 
         if(args.ws_only) {
-            send_packet_detached(
-                proto::Type::EthernetFrame, [](uint32_t result) {
-                    assert_n(result);
-                },
-                payload);
+            send_generic_packet(proto::Type::EthernetFrame, 0, payload);
         } else {
             send_packet_p2p(p2p::proto::build_packet(proto::Type::EthernetFrame, 0, payload));
         }
