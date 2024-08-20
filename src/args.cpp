@@ -3,7 +3,6 @@
 #include "util/argument-parser.hpp"
 #include "util/pair-table.hpp"
 
-namespace {
 namespace args {
 const auto enc_method_str = make_pair_table<EncMethod, std::string_view>({
     {EncMethod::None, "none"},
@@ -31,7 +30,6 @@ auto parse_cidr(const char* const cidr) -> std::optional<std::array<uint32_t, 2>
     const auto mask = uint32_t(0xffffffff << (32 - m));
     return std::array{addr, mask};
 }
-} // namespace
 
 auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args> {
     auto cidr   = (const char*)(nullptr);
