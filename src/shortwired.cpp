@@ -107,11 +107,11 @@ auto Session::on_disconnected() -> void {
 }
 
 auto Session::on_packet_received(const std::span<const std::byte> payload) -> bool {
-    unwrap_pb(header, p2p::proto::extract_header(payload));
+    unwrap(header, p2p::proto::extract_header(payload));
 
     switch(header.type) {
     case proto::Type::ServerParameters: {
-        unwrap_pb(packet, p2p::proto::extract_payload<proto::ServerParameters>(payload));
+        unwrap(packet, p2p::proto::extract_payload<proto::ServerParameters>(payload));
         args.enc_method = packet.enc_method;
         args.mtu        = packet.mtu;
         args.ws_only    = packet.websocket_only;
@@ -121,7 +121,7 @@ auto Session::on_packet_received(const std::span<const std::byte> payload) -> bo
         return true;
     }
     case proto::Type::Datagram: {
-        assert_b(process_received_datagram(payload.subspan(sizeof(proto::Datagram))));
+        ensure(process_received_datagram(payload.subspan(sizeof(proto::Datagram))));
         return true;
     }
     default:
@@ -134,19 +134,18 @@ auto Session::on_packet_received(const std::span<const std::byte> payload) -> bo
 }
 
 auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void {
-    unwrap_pn(header, p2p::proto::extract_header(payload));
+    unwrap(header, p2p::proto::extract_header(payload));
 
     switch(header.type) {
     case proto::Type::Datagram: {
-        assert_n(process_received_datagram(payload.subspan(sizeof(proto::Datagram))));
+        ensure(process_received_datagram(payload.subspan(sizeof(proto::Datagram))));
         return;
     }
     case proto::Type::Nop: {
         return;
     }
     default:
-        WARN("unknown packet type");
-        return;
+        bail("unknown packet type");
     }
 }
 
@@ -159,21 +158,21 @@ auto Session::process_received_datagram(std::span<const std::byte> data) -> bool
     case EncMethod::None:
         break;
     case EncMethod::AES: {
-        assert_b(data.size() > crypto::aes::iv_len, "packet too short");
+        ensure(data.size() > crypto::aes::iv_len, "packet too short");
         const auto [iv, enc] = split_iv_enc(data, crypto::aes::iv_len);
-        unwrap_ob_mut(dec, crypto::aes::decrypt(dec_context.get(), key, iv, enc));
+        unwrap_mut(dec, crypto::aes::decrypt(dec_context.get(), key, iv, enc));
         decrypted = std::move(dec);
         data      = decrypted;
     } break;
     case EncMethod::C20P1305: {
-        assert_b(data.size() > crypto::c20p1305::iv_len, "packet too short");
+        ensure(data.size() > crypto::c20p1305::iv_len, "packet too short");
         const auto [iv, enc] = split_iv_enc(data, crypto::c20p1305::iv_len);
-        unwrap_ob_mut(dec, crypto::c20p1305::decrypt(dec_context.get(), key, iv, enc));
+        unwrap_mut(dec, crypto::c20p1305::decrypt(dec_context.get(), key, iv, enc));
         decrypted = std::move(dec);
         data      = decrypted;
     } break;
     }
-    assert_b(size_t(write(dev.as_handle(), data.data(), data.size())) == data.size(), strerror(errno));
+    ensure(size_t(write(dev.as_handle(), data.data(), data.size())) == data.size(), strerror(errno));
     return true;
 }
 
@@ -189,20 +188,20 @@ loop:
         std::this_thread::yield();
         goto loop;
     default:
-        assert_b(false, errno, " ", strerror(errno));
+        bail(errno, " ", strerror(errno));
     }
 }
 
 auto Session::start() -> bool {
     if(args.key_file != nullptr) {
-        unwrap_ob(key_b, read_file(args.key_file));
-        assert_b(key_b.size() == key.size());
+        unwrap(key_b, read_file(args.key_file));
+        ensure(key_b.size() == key.size());
         std::memcpy(key.data(), key_b.data(), key.size());
     }
 
     auto plink_user_cert = std::string();
     if(args.peer_linker_user_cert_path != nullptr) {
-        unwrap_ob(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
+        unwrap(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
         plink_user_cert = from_span(cert);
     }
     const auto server_pad_name = build_string(args.username, "_server");
@@ -218,12 +217,12 @@ auto Session::start() -> bool {
     if(args.server) {
         print("waiting for client");
     }
-    assert_b(p2p::plink::PeerLinkerSession::start(plink_params));
+    ensure(p2p::plink::PeerLinkerSession::start(plink_params));
 
     if(args.server) {
-        assert_b(send_packet(proto::Type::ServerParameters, int(args.enc_method), uint16_t(args.mtu), uint8_t(args.ws_only), uint8_t(args.tap)));
+        ensure(send_packet(proto::Type::ServerParameters, int(args.enc_method), uint16_t(args.mtu), uint8_t(args.ws_only), uint8_t(args.tap)));
     } else {
-        assert_b(wait_for_event(EventKind::ServerParameters));
+        ensure(wait_for_event(EventKind::ServerParameters));
     }
     if(args.enc_method != EncMethod::None) {
         enc_context.reset(crypto::alloc_cipher_context());
@@ -232,32 +231,32 @@ auto Session::start() -> bool {
         warn("no private key provided, continuing without encryption");
     }
 
-    unwrap_ob(dev, setup_virtual_nic({
-                       .address = args.address,
-                       .mask    = args.mask,
-                       .mtu     = args.mtu,
-                       .tap     = args.tap,
-                   }));
+    unwrap(dev, setup_virtual_nic({
+                    .address = args.address,
+                    .mask    = args.mask,
+                    .mtu     = args.mtu,
+                    .tap     = args.tap,
+                }));
     this->dev = FileDescriptor(dev);
 
     if(args.ws_only) {
         return true;
     }
 
-    assert_b(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
+    ensure(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
 
     print("adjusting mtu");
     juice_set_log_level(JUICE_LOG_LEVEL_ERROR); // supress logs to preserve errno inside libjuice
-    unwrap_ob_mut(mtu, get_mtu(dev));
+    unwrap_mut(mtu, get_mtu(dev));
     const auto overhead = get_packet_overhead(args);
     const auto buffer   = std::vector<std::byte>(mtu + overhead);
     while(mtu > 500) {
         if(send_packet_p2p_retry(p2p::proto::build_packet(proto::Type::Nop, 0, std::span{buffer.data(), mtu + overhead}))) {
             break;
         }
-        assert_b(errno == EMSGSIZE, errno, " ", strerror(errno));
+        ensure(errno == EMSGSIZE, errno, " ", strerror(errno));
         mtu -= 1;
-        assert_b(set_mtu(dev, mtu));
+        ensure(set_mtu(dev, mtu));
     }
     juice_set_log_level(JUICE_LOG_LEVEL_WARN);
     print("mtu adjusted to ", mtu);
@@ -272,13 +271,13 @@ auto Session::run() -> bool {
         pollfd{.fd = stop, .events = POLLIN},
     };
 loop:
-    assert_b(poll(fds.data(), fds.size(), -1) != -1);
+    ensure(poll(fds.data(), fds.size(), -1) != -1);
     if(fds[0].revents & POLLIN) {
         const auto len = read(fds[0].fd, buf.data(), buf.size());
         if(verbose) {
             print("<<< ", len, " bytes");
         }
-        assert_b(len > 0);
+        ensure(len > 0);
 
         auto payload   = std::span<std::byte>((std::byte*)buf.data(), size_t(len));
         auto encrypted = std::vector<std::byte>();
@@ -287,13 +286,13 @@ loop:
             break;
         case EncMethod::AES: {
             const auto iv = random_engine.generate<crypto::aes::iv_len>();
-            unwrap_ob_mut(enc, crypto::aes::encrypt(enc_context.get(), key, iv, payload));
+            unwrap_mut(enc, crypto::aes::encrypt(enc_context.get(), key, iv, payload));
             encrypted = concat(iv, enc);
             payload   = encrypted;
         } break;
         case EncMethod::C20P1305: {
             const auto iv = random_engine.generate<crypto::c20p1305::iv_len>();
-            unwrap_ob_mut(enc, crypto::c20p1305::encrypt(enc_context.get(), key, iv, payload));
+            unwrap_mut(enc, crypto::c20p1305::encrypt(enc_context.get(), key, iv, payload));
             encrypted = concat(iv, enc);
             payload   = encrypted;
         } break;
@@ -314,21 +313,17 @@ loop:
 Session::Session(Args args)
     : args(args) {
 }
+} // namespace
 
-auto run(const int argc, const char* const argv[]) -> bool {
-    unwrap_ob(args, Args::parse(argc, argv));
+auto main(const int argc, const char* const argv[]) -> int {
+    unwrap(args, Args::parse(argc, argv));
 
     ws::set_log_level(0b11);
     // juice_set_log_level(JUICE_LOG_LEVEL_INFO);
     auto session = Session(args);
     session.set_ws_debug_flags(false, false);
-    assert_b(session.start());
+    ensure(session.start());
     print("ready");
-    assert_b(session.run());
-    return true;
-}
-} // namespace
-
-auto main(const int argc, const char* const argv[]) -> int {
-    return run(argc, argv) ? 0 : 1;
+    ensure(session.run());
+    return 0;
 }

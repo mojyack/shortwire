@@ -12,7 +12,7 @@ const auto enc_method_str = make_pair_table<EncMethod, std::string_view>({
 
 template <>
 auto from_string<EncMethod>(const CStr str) -> std::optional<EncMethod> {
-    unwrap_po(m, enc_method_str.find(str));
+    unwrap(m, enc_method_str.find(str));
     return m;
 }
 
@@ -24,8 +24,8 @@ auto to_string<EncMethod>(const EncMethod& data) -> std::string {
 
 auto parse_cidr(const char* const cidr) -> std::optional<std::array<uint32_t, 2>> {
     auto a = uint8_t(), b = uint8_t(), c = uint8_t(), d = uint8_t(), m = uint8_t();
-    assert_o(sscanf(cidr, "%hhu.%hhu.%hhu.%hhu/%hhu", &a, &b, &c, &d, &m) == 5, "invalid cidr");
-    assert_o(m <= 32, "invalid mask");
+    ensure(sscanf(cidr, "%hhu.%hhu.%hhu.%hhu/%hhu", &a, &b, &c, &d, &m) == 5, "invalid cidr");
+    ensure(m <= 32, "invalid mask");
     const auto addr = uint32_t(a << 24 | b << 16 | c << 8 | d);
     const auto mask = uint32_t(0xffffffff << (32 - m));
     return std::array{addr, mask};
@@ -52,10 +52,10 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
         print("usage: p2p-vpn ", parser.get_help());
         exit(0);
     }
-    unwrap_oo(parsed_cidr, parse_cidr(cidr));
+    unwrap(parsed_cidr, parse_cidr(cidr));
     args.address = parsed_cidr[0];
     args.mask    = parsed_cidr[1];
-    assert_o(!args.server || args.enc_method == EncMethod::None || args.key_file != nullptr, "encryption enabled, but no key file specified");
-    assert_o(!args.server || args.enc_method != EncMethod::None || args.key_file == nullptr, "key file specified, but no encryption method set");
+    ensure(!args.server || args.enc_method == EncMethod::None || args.key_file != nullptr, "encryption enabled, but no key file specified");
+    ensure(!args.server || args.enc_method != EncMethod::None || args.key_file == nullptr, "key file specified, but no encryption method set");
     return args;
 }
