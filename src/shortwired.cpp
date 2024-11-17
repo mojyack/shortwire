@@ -150,9 +150,6 @@ auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void
 }
 
 auto Session::process_received_datagram(std::span<const std::byte> data) -> bool {
-    if(verbose) {
-        print(">>> ", data.size(), " bytes");
-    }
     auto decrypted = std::vector<std::byte>();
     switch(args.enc_method) {
     case EncMethod::None:
@@ -207,7 +204,7 @@ auto Session::start() -> bool {
     const auto server_pad_name = build_string(args.username, "_server");
     const auto client_pad_name = build_string(args.username, "_client");
     const auto plink_params    = p2p::plink::PeerLinkerSessionParams{
-           .peer_linker                   = p2p::wss::ServerLocation{args.peer_linker_addr, args.peer_linker_port},
+           .peer_linker                   = p2p::ServerLocation{args.peer_linker_addr, args.peer_linker_port},
            .pad_name                      = args.server ? server_pad_name : client_pad_name,
            .target_pad_name               = args.server ? "" : std::string_view(server_pad_name),
            .user_certificate              = plink_user_cert,
@@ -222,7 +219,7 @@ auto Session::start() -> bool {
     if(args.server) {
         ensure(send_packet(proto::Type::ServerParameters, int(args.enc_method), uint16_t(args.mtu), uint8_t(args.ws_only), uint8_t(args.tap)));
     } else {
-        ensure(wait_for_event(EventKind::ServerParameters));
+        ensure(events.wait_for(EventKind::ServerParameters));
     }
     if(args.enc_method != EncMethod::None) {
         enc_context.reset(crypto::alloc_cipher_context());
@@ -274,9 +271,6 @@ loop:
     ensure(poll(fds.data(), fds.size(), -1) != -1);
     if(fds[0].revents & POLLIN) {
         const auto len = read(fds[0].fd, buf.data(), buf.size());
-        if(verbose) {
-            print("<<< ", len, " bytes");
-        }
         ensure(len > 0);
 
         auto payload   = std::span<std::byte>((std::byte*)buf.data(), size_t(len));
@@ -321,7 +315,6 @@ auto main(const int argc, const char* const argv[]) -> int {
     ws::set_log_level(0b11);
     // juice_set_log_level(JUICE_LOG_LEVEL_INFO);
     auto session = Session(args);
-    session.set_ws_debug_flags(false, false);
     ensure(session.start());
     print("ready");
     ensure(session.run());

@@ -18,11 +18,9 @@ struct Args {
     uint32_t    mask;
     uint16_t    peer_linker_port = 8080;
     uint16_t    mtu              = 1400;
-    bool        verbose          = false;
     bool        server           = false;
     bool        tap              = false;
     bool        ws_only          = false;
-    bool        help             = false;
 
     static auto parse(int argc, const char* const argv[]) -> std::optional<Args>;
 };

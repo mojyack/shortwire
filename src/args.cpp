@@ -34,21 +34,21 @@ auto parse_cidr(const char* const cidr) -> std::optional<std::array<uint32_t, 2>
 auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args> {
     auto cidr   = (const char*)(nullptr);
     auto args   = Args();
+    auto help   = false;
     auto parser = args::Parser<uint8_t, uint16_t, EncMethod>();
-    parser.kwarg(&cidr, {"-c", "--cidr"}, {"CIDR", "address and subnet-mask of the virtual nic"});
-    parser.kwarg(&args.username, {"-u", "--username"}, {"USERNAME", "name to identify you from other users"});
-    parser.kwarg(&args.peer_linker_addr, {"-pa", "--peer-linker-addr"}, {"HOSTNAME", "peer-linker address"});
-    parser.kwarg(&args.peer_linker_port, {"-pp", "--peer-linker-port"}, {"PORT", "peer-linker port number", args::State::DefaultValue});
-    parser.kwarg(&args.peer_linker_user_cert_path, {"-pc", "--peer-linker-cert"}, {"FILE", "peer-linker user certificate", args::State::Initialized});
-    parser.kwarg(&args.enc_method, {"-e", "--encryption-method"}, {"none|aes|chacha20-poly1305", "server-only: encryption method to use", args::State::DefaultValue});
-    parser.kwarg(&args.key_file, {"-k", "--key"}, {"FILE", "shared key for encryption", args::State::Initialized});
-    parser.kwarg(&args.server, {"-s", "--server"}, {"", "act as a server", args::State::Initialized});
-    parser.kwarg(&args.tap, {"-t", "--tap"}, {"", "server-only: use tap device instead of tun", args::State::Initialized});
-    parser.kwarg(&args.mtu, {"-m", "--mtu"}, {"MTU", "server-only: mtu of virtual nic", args::State::DefaultValue});
-    parser.kwarg(&args.ws_only, {"-wo", "--websocket-only"}, {"", "server-only: do not use p2p connection", args::State::Initialized});
-    parser.kwarg(&args.ws_only, {"-v"}, {"", "enable verbose output", args::State::Initialized});
-    parser.kwarg(&args.help, {"-h", "--help"}, {.arg_desc = "print this help message", .state = args::State::Initialized, .no_error_check = true});
-    if(!parser.parse(argc, argv) || args.help) {
+    parser.kwarg(&cidr, {"-c", "--cidr"}, "CIDR", "address and subnet-mask of the virtual nic");
+    parser.kwarg(&args.username, {"-u", "--username"}, "USERNAME", "name to identify you from other users");
+    parser.kwarg(&args.peer_linker_addr, {"-pa", "--peer-linker-addr"}, "HOSTNAME", "peer-linker address");
+    parser.kwarg(&args.peer_linker_port, {"-pp", "--peer-linker-port"}, "PORT", "peer-linker port number", {.state = args::State::DefaultValue});
+    parser.kwarg(&args.peer_linker_user_cert_path, {"-pc", "--peer-linker-cert"}, "FILE", "peer-linker user certificate", {.state = args::State::Initialized});
+    parser.kwarg(&args.enc_method, {"-e", "--encryption-method"}, "none|aes|chacha20-poly1305", "server-only: encryption method to use", {.state = args::State::DefaultValue});
+    parser.kwarg(&args.key_file, {"-k", "--key"}, "FILE", "shared key for encryption", {.state = args::State::Initialized});
+    parser.kwflag(&args.server, {"-s", "--server"}, "act as a server");
+    parser.kwflag(&args.tap, {"-t", "--tap"}, "server-only: use tap device instead of tun");
+    parser.kwarg(&args.mtu, {"-m", "--mtu"}, "MTU", "server-only: mtu of virtual nic", {.state = args::State::DefaultValue});
+    parser.kwflag(&args.ws_only, {"-wo", "--websocket-only"}, "server-only: do not use p2p connection", {.state = args::State::Initialized});
+    parser.kwflag(&help, {"-h", "--help"}, "print this help message", {.no_error_check = true});
+    if(!parser.parse(argc, argv) || help) {
         print("usage: p2p-vpn ", parser.get_help());
         exit(0);
     }
