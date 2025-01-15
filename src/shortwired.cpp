@@ -175,16 +175,14 @@ auto Session::process_received_datagram(std::span<const std::byte> data) -> bool
 
 auto Session::send_packet_p2p_retry(const std::span<const std::byte> payload) -> bool {
 loop:
-    if(send_packet_p2p(payload)) {
+    switch(send_packet_p2p(payload)) {
+    case p2p::ice::SendResult::Success:
         return true;
-    }
-    switch(errno) {
-    case EMSGSIZE:
-        return false;
-    case EAGAIN:
+    case p2p::ice::SendResult::WouldBlock:
         std::this_thread::yield();
         goto loop;
-    default:
+    case p2p::ice::SendResult::MessageTooLarge:
+    case p2p::ice::SendResult::UnknownError:
         bail(errno, " ", strerror(errno));
     }
 }
@@ -243,16 +241,17 @@ auto Session::start() -> bool {
     ensure(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
 
     print("adjusting mtu");
-    juice_set_log_level(JUICE_LOG_LEVEL_ERROR); // supress logs to preserve errno inside libjuice
+    juice_set_log_level(JUICE_LOG_LEVEL_ERROR); // supress libjuice warnings while adjusting mtu
     unwrap_mut(mtu, get_mtu(dev));
     const auto overhead = get_packet_overhead(args);
     const auto buffer   = std::vector<std::byte>(mtu + overhead);
     while(mtu > 500) {
-        if(send_packet_p2p_retry(p2p::proto::build_packet(proto::Type::Nop, 0, std::span{buffer.data(), mtu + overhead}))) {
+        const auto result = send_packet_p2p(p2p::proto::build_packet(proto::Type::Nop, 0, std::span{buffer.data(), mtu + overhead}));
+        if(result == p2p::ice::SendResult::Success) {
             break;
         }
-        ensure(errno == EMSGSIZE, errno, " ", strerror(errno));
-        mtu -= 1;
+        ensure(result == p2p::ice::SendResult::MessageTooLarge);
+        mtu -= 10;
         ensure(set_mtu(dev, mtu));
     }
     juice_set_log_level(JUICE_LOG_LEVEL_WARN);
