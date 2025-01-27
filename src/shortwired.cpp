@@ -95,14 +95,14 @@ auto get_packet_overhead(const Args& args) -> size_t {
 }
 
 auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> /*secret*/) -> bool {
-    return peer_name == build_string(args.username, "_client");
+    return peer_name == std::format("{}_client", args.username);
 }
 
 auto Session::on_pad_created() -> void {
 }
 
 auto Session::on_disconnected() -> void {
-    print("session disconnected");
+    std::println("session disconnected");
     stop.notify();
 }
 
@@ -169,7 +169,7 @@ auto Session::process_received_datagram(std::span<const std::byte> data) -> bool
         data      = decrypted;
     } break;
     }
-    ensure(size_t(write(dev.as_handle(), data.data(), data.size())) == data.size(), strerror(errno));
+    ensure(size_t(write(dev.as_handle(), data.data(), data.size())) == data.size(), "{}", strerror(errno));
     return true;
 }
 
@@ -183,7 +183,7 @@ loop:
         goto loop;
     case p2p::ice::SendResult::MessageTooLarge:
     case p2p::ice::SendResult::UnknownError:
-        bail(errno, " ", strerror(errno));
+        bail("send_packet_p2p() failed");
     }
 }
 
@@ -199,8 +199,8 @@ auto Session::start() -> bool {
         unwrap(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
         plink_user_cert = from_span(cert);
     }
-    const auto server_pad_name = build_string(args.username, "_server");
-    const auto client_pad_name = build_string(args.username, "_client");
+    const auto server_pad_name = std::format("{}_server", args.username);
+    const auto client_pad_name = std::format("{}_client", args.username);
     const auto plink_params    = p2p::plink::PeerLinkerSessionParams{
            .peer_linker                   = p2p::ServerLocation{args.peer_linker_addr, args.peer_linker_port},
            .pad_name                      = args.server ? server_pad_name : client_pad_name,
@@ -210,7 +210,7 @@ auto Session::start() -> bool {
     };
 
     if(args.server) {
-        print("waiting for client");
+        std::println("waiting for client");
     }
     ensure(p2p::plink::PeerLinkerSession::start(plink_params));
 
@@ -223,7 +223,7 @@ auto Session::start() -> bool {
         enc_context.reset(crypto::alloc_cipher_context());
         dec_context.reset(crypto::alloc_cipher_context());
     } else {
-        warn("no private key provided, continuing without encryption");
+        std::println(stderr, "no private key provided, continuing without encryption");
     }
 
     unwrap(dev, setup_virtual_nic({
@@ -240,7 +240,7 @@ auto Session::start() -> bool {
 
     ensure(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
 
-    print("adjusting mtu");
+    std::println("adjusting mtu");
     juice_set_log_level(JUICE_LOG_LEVEL_ERROR); // supress libjuice warnings while adjusting mtu
     unwrap_mut(mtu, get_mtu(dev));
     const auto overhead = get_packet_overhead(args);
@@ -255,7 +255,7 @@ auto Session::start() -> bool {
         ensure(set_mtu(dev, mtu));
     }
     juice_set_log_level(JUICE_LOG_LEVEL_WARN);
-    print("mtu adjusted to ", mtu);
+    std::println("mtu adjusted to {}", mtu);
 
     return true;
 }
@@ -315,7 +315,7 @@ auto main(const int argc, const char* const argv[]) -> int {
     // juice_set_log_level(JUICE_LOG_LEVEL_INFO);
     auto session = Session(args);
     ensure(session.start());
-    print("ready");
+    std::println("ready");
     ensure(session.run());
     return 0;
 }

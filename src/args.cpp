@@ -49,7 +49,7 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
     parser.kwflag(&args.ws_only, {"-wo", "--websocket-only"}, "server-only: do not use p2p connection", {.state = args::State::Initialized});
     parser.kwflag(&help, {"-h", "--help"}, "print this help message", {.no_error_check = true});
     if(!parser.parse(argc, argv) || help) {
-        print("usage: p2p-vpn ", parser.get_help());
+        std::println("usage: shortwired {}", parser.get_help());
         exit(0);
     }
     unwrap(parsed_cidr, parse_cidr(cidr));

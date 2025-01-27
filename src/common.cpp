@@ -14,7 +14,7 @@
 #include "util/fd.hpp"
 
 auto print_mac_addr(const uint8_t* const addr) -> void {
-    printf("%02x:%02x:%02x:%02x:%02x:%02x\n", addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
+    std::println("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", addr[0], addr[1], addr[2], addr[3], addr[4], addr[5]);
 }
 
 auto to_inet_addr(const char* const str) -> std::optional<uint32_t> {
@@ -32,7 +32,7 @@ auto setup_virtual_nic(const VNICParams& params) -> std::optional<int> {
     ifr.ifr_flags = (params.tap ? IFF_TAP : IFF_TUN) | IFF_NO_PI;
     strncpy(ifr.ifr_name, "tun%d", IFNAMSIZ);
     ensure(ioctl(dev.as_handle(), TUNSETIFF, &ifr) == 0);
-    print("interface created: ", ifr.ifr_name);
+    std::println("interface created: {}", ifr.ifr_name);
 
     // dummy socket for setting parameters
     const auto sock = FileDescriptor(socket(AF_INET, SOCK_DGRAM, 0));
@@ -40,7 +40,7 @@ auto setup_virtual_nic(const VNICParams& params) -> std::optional<int> {
     // set address
     ifr.ifr_addr.sa_family                         = AF_INET;
     ((sockaddr_in*)&ifr.ifr_addr)->sin_addr.s_addr = htonl(params.address);
-    ensure(ioctl(sock.as_handle(), SIOCSIFADDR, &ifr) == 0, strerror(errno));
+    ensure(ioctl(sock.as_handle(), SIOCSIFADDR, &ifr) == 0, "{}", strerror(errno));
 
     // set address mask
     ((sockaddr_in*)&ifr.ifr_addr)->sin_addr.s_addr = htonl(params.mask);

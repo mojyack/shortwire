@@ -39,7 +39,7 @@ loop:
         ensure(!(fds[i].revents & POLLHUP));
         ensure(!(fds[i].revents & POLLERR));
         if(fds[i].revents & POLLIN) {
-            // print(i, " -> ", !i);
+            // std::println("{} -> {}", i, !i);
             if(i == 0) {
                 // dev -> sock
                 len = uint16_t(read(fds[i].fd, data, vnic_mtu));
