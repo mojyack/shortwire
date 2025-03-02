@@ -1,4 +1,4 @@
-project('shortwire', 'cpp', version: '1.0.0', default_options : ['warning_level=3', 'werror=false', 'cpp_std=c++20'])
+project('shortwire', 'cpp', version: '1.0.0', default_options : ['warning_level=3', 'werror=false', 'cpp_std=c++23'])
 add_project_arguments('-Wno-missing-field-initializers', language: 'cpp')
 
 subdir('src/p2p')
