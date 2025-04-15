@@ -137,6 +137,12 @@ auto ShortWire::start_backend() -> coop::Async<bool> {
         co_await server_params_received;
     }
 
+    if(args.enc != EncMethod::None) {
+        dec_context.reset(crypto::alloc_cipher_context());
+    } else {
+        WARN("no private key provided, continuing without encryption");
+    }
+
     coop_unwrap(dev, setup_virtual_nic({
                          .address = args.address,
                          .mask    = args.mask,
@@ -183,11 +189,6 @@ loop:
 }
 
 auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
-    if(args.enc != EncMethod::None) {
-        dec_context.reset(crypto::alloc_cipher_context());
-    } else {
-        WARN("no private key provided, continuing without encryption");
-    }
     if(args.key_file != nullptr) {
         coop_unwrap(key_b, read_file(args.key_file));
         coop_ensure(key_b.size() == key.size());
