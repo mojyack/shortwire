@@ -41,12 +41,11 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
     parser.kwarg(&args.peer_linker_addr, {"-pa", "--peer-linker-addr"}, "HOSTNAME", "peer-linker address");
     parser.kwarg(&args.peer_linker_port, {"-pp", "--peer-linker-port"}, "PORT", "peer-linker port number", {.state = args::State::DefaultValue});
     parser.kwarg(&args.peer_linker_user_cert_path, {"-pc", "--peer-linker-cert"}, "FILE", "peer-linker user certificate", {.state = args::State::Initialized});
-    parser.kwarg(&args.enc_method, {"-e", "--encryption-method"}, "none|aes|chacha20-poly1305", "server-only: encryption method to use", {.state = args::State::DefaultValue});
+    parser.kwarg(&args.enc, {"-e", "--encryption-method"}, "none|aes|chacha20-poly1305", "server-only: encryption method to use", {.state = args::State::DefaultValue});
     parser.kwarg(&args.key_file, {"-k", "--key"}, "FILE", "shared key for encryption", {.state = args::State::Initialized});
     parser.kwflag(&args.server, {"-s", "--server"}, "act as a server");
     parser.kwflag(&args.tap, {"-t", "--tap"}, "server-only: use tap device instead of tun");
     parser.kwarg(&args.mtu, {"-m", "--mtu"}, "MTU", "server-only: mtu of virtual nic", {.state = args::State::DefaultValue});
-    parser.kwflag(&args.ws_only, {"-wo", "--websocket-only"}, "server-only: do not use p2p connection", {.state = args::State::Initialized});
     parser.kwflag(&help, {"-h", "--help"}, "print this help message", {.no_error_check = true});
     if(!parser.parse(argc, argv) || help) {
         std::println("usage: shortwired {}", parser.get_help());
@@ -55,7 +54,7 @@ auto Args::parse(const int argc, const char* const argv[]) -> std::optional<Args
     unwrap(parsed_cidr, parse_cidr(cidr));
     args.address = parsed_cidr[0];
     args.mask    = parsed_cidr[1];
-    ensure(!args.server || args.enc_method == EncMethod::None || args.key_file != nullptr, "encryption enabled, but no key file specified");
-    ensure(!args.server || args.enc_method != EncMethod::None || args.key_file == nullptr, "key file specified, but no encryption method set");
+    ensure(!args.server || args.enc == EncMethod::None || args.key_file != nullptr, "encryption enabled, but no key file specified");
+    ensure(!args.server || args.enc != EncMethod::None || args.key_file == nullptr, "key file specified, but no encryption method set");
     return args;
 }

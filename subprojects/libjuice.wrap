@@ -1,1 +1,9 @@
-../submodules/peer-linker/subprojects/libjuice.wrap
+[wrap-git]
+url = https://github.com/paullouisageneau/libjuice.git
+revision = v1.6.0
+depth = 1
+method = cmake
+
+[provide]
+libjuice = juice_dep
+

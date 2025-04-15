@@ -1,13 +1,17 @@
+#include <coop/generator.hpp>
+#include <coop/thread.hpp>
+
 #include "args.hpp"
 #include "common.hpp"
 #include "crypto/aes.hpp"
 #include "crypto/c20p1305.hpp"
-#include "macros/unwrap.hpp"
-#include "p2p/ice-session-protocol.hpp"
-#include "p2p/ice-session.hpp"
-#include "p2p/ws/misc.hpp"
+#include "macros/coop-unwrap.hpp"
+#include "p2p/conn.hpp"
+#include "p2p/net/packet-parser.hpp"
+#include "plink/peer-linker-client.hpp"
+#include "protocol.hpp"
+#include "util/cleaner.hpp"
 #include "util/concat.hpp"
-#include "util/event-fd.hpp"
 #include "util/fd.hpp"
 #include "util/file-io.hpp"
 #include "util/random.hpp"
@@ -18,140 +22,46 @@ constexpr auto key_len = 32;
 static_assert(crypto::c20p1305::key_len == key_len);
 using Key = std::array<std::byte, key_len>;
 
-namespace proto {
-struct Type {
-    enum : uint16_t {
-        ServerParameters = ::p2p::ice::proto::Type::Limit,
-        Datagram,
-        Nop,
-
-        Limit,
-    };
-};
-
-struct ServerParameters : ::p2p::proto::Packet {
-    EncMethod enc_method;
-    uint16_t  mtu;
-    uint8_t   websocket_only;
-    uint8_t   tap;
-};
-
-struct Datagram : ::p2p::proto::Packet {
-    // std::byte data[];
-};
-} // namespace proto
-
-struct EventKind {
-    enum {
-        ServerParameters = p2p::ice::EventKind::Limit,
-
-        Limit,
-    };
-};
-
-class Session : public p2p::ice::IceSession {
-  private:
-    Args                args;
-    FileDescriptor      dev;
-    EventFileDescriptor stop;
-
-    RandomEngine              random_engine;
-    crypto::AutoCipherContext enc_context;
-    crypto::AutoCipherContext dec_context;
-    Key                       key;
-
-    auto auth_peer(std::string_view peer_name, std::span<const std::byte> secret) -> bool override;
-    auto on_pad_created() -> void override;
-    auto on_disconnected() -> void override;
-    auto on_packet_received(std::span<const std::byte> payload) -> bool override;
-    auto on_p2p_packet_received(std::span<const std::byte> payload) -> void override;
-
-    auto process_received_datagram(std::span<const std::byte> data) -> bool;
-    auto send_packet_p2p_retry(std::span<const std::byte> payload) -> bool;
-
-  public:
-    auto start() -> bool;
-    auto run() -> bool;
-
-    Session(Args args);
-};
-
 auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) -> std::array<std::span<const std::byte>, 2> {
     const auto iv  = data.subspan(0, iv_len);
     const auto enc = data.subspan(iv_len);
     return {iv, enc};
 }
 
-auto get_packet_overhead(const Args& args) -> size_t {
-    const auto header_len = args.tap ? 14 : 0;
-    switch(args.enc_method) {
-    case EncMethod::None:
-        return header_len;
-    case EncMethod::AES:
-        return header_len + crypto::aes::iv_len + crypto::aes::block_len; // +block_len is worst case
-    case EncMethod::C20P1305:
-        return header_len + crypto::c20p1305::iv_len + crypto::c20p1305::tag_len;
-    }
-}
+struct ShortWire {
+    Args                                args;
+    std::unique_ptr<net::ClientBackend> backend;
+    net::PacketParser                   parser;
+    p2p::Connection                     p2p;
+    FileDescriptor                      vnic;
+    crypto::AutoCipherContext           dec_context;
+    Key                                 key;
 
-auto Session::auth_peer(std::string_view peer_name, std::span<const std::byte> /*secret*/) -> bool {
-    return peer_name == std::format("{}_client", args.username);
-}
+    auto handle_parsed(net::Header header, net::BytesRef payload) -> coop::Async<bool>;
+    auto handle_datagram(net::BytesRef data) -> bool;
+    auto start_backend() -> coop::Async<bool>;
+    auto vnic_reader_main() -> bool;
 
-auto Session::on_pad_created() -> void {
-}
+    auto run(coop::TaskInjector& injector) -> coop::Async<bool>;
+};
 
-auto Session::on_disconnected() -> void {
-    std::println("session disconnected");
-    stop.notify();
-}
-
-auto Session::on_packet_received(const std::span<const std::byte> payload) -> bool {
-    unwrap(header, p2p::proto::extract_header(payload));
-
+auto ShortWire::handle_parsed(net::Header header, net::BytesRef payload) -> coop::Async<bool> {
     switch(header.type) {
-    case proto::Type::ServerParameters: {
-        unwrap(packet, p2p::proto::extract_payload<proto::ServerParameters>(payload));
-        args.enc_method = packet.enc_method;
-        args.mtu        = packet.mtu;
-        args.ws_only    = packet.websocket_only;
-        args.tap        = packet.tap;
-        send_result(p2p::proto::Type::Success, header.id);
-        events.invoke(EventKind::ServerParameters, p2p::no_id, p2p::no_value);
-        return true;
-    }
-    case proto::Type::Datagram: {
-        ensure(process_received_datagram(payload.subspan(sizeof(proto::Datagram))));
-        return true;
-    }
+    case proto::Signaling::pt:
+        coop_ensure(co_await p2p.push_signaling_data(payload));
+        break;
+    case proto::Nop::pt:
+        break;
     default:
-        if(args.ws_only) {
-            return p2p::plink::PeerLinkerSession::on_packet_received(payload);
-        } else {
-            return p2p::ice::IceSession::on_packet_received(payload);
-        }
+        coop_ensure(co_await parser.callbacks.invoke(header, payload));
+        break;
     }
+    co_return true;
 }
 
-auto Session::on_p2p_packet_received(std::span<const std::byte> payload) -> void {
-    unwrap(header, p2p::proto::extract_header(payload));
-
-    switch(header.type) {
-    case proto::Type::Datagram: {
-        ensure(process_received_datagram(payload.subspan(sizeof(proto::Datagram))));
-        return;
-    }
-    case proto::Type::Nop: {
-        return;
-    }
-    default:
-        bail("unknown packet type");
-    }
-}
-
-auto Session::process_received_datagram(std::span<const std::byte> data) -> bool {
+auto ShortWire::handle_datagram(net::BytesRef data) -> bool {
     auto decrypted = std::vector<std::byte>();
-    switch(args.enc_method) {
+    switch(args.enc) {
     case EncMethod::None:
         break;
     case EncMethod::AES: {
@@ -169,153 +79,163 @@ auto Session::process_received_datagram(std::span<const std::byte> data) -> bool
         data      = decrypted;
     } break;
     }
-    ensure(size_t(write(dev.as_handle(), data.data(), data.size())) == data.size(), "{}", strerror(errno));
+    ensure(size_t(write(vnic.as_handle(), data.data(), data.size())) == data.size(), "{}", strerror(errno));
     return true;
 }
 
-auto Session::send_packet_p2p_retry(const std::span<const std::byte> payload) -> bool {
-loop:
-    switch(send_packet_p2p(payload)) {
-    case p2p::ice::SendResult::Success:
-        return true;
-    case p2p::ice::SendResult::WouldBlock:
-        std::this_thread::yield();
-        goto loop;
-    case p2p::ice::SendResult::MessageTooLarge:
-    case p2p::ice::SendResult::UnknownError:
-        bail("send_packet_p2p() failed");
-    }
-}
+auto ShortWire::start_backend() -> coop::Async<bool> {
+    auto backend = new plink::PeerLinkerClientBackend();
+    this->backend.reset(backend);
+    backend->on_auth_request = [this](std::string_view name, net::BytesRef) { return name == std::format("{}_client", args.username); };
+    backend->on_closed       = []() { std::quick_exit(1); };
+    backend->on_received     = [this](net::BytesRef data) -> coop::Async<void> {
+        const auto parsed = parser.parse_received(data);
+        std::println("parsed? {}", parsed.has_value());
+        if(!parsed) {
+            co_return;
+        }
+        const auto& [header, payload] = *parsed;
+        if(!co_await handle_parsed(header, payload) && header.type != proto::Error::pt) {
+            co_await parser.send_packet(proto::Error(), header.id);
+        }
+        std::println("done");
+    };
 
-auto Session::start() -> bool {
-    if(args.key_file != nullptr) {
-        unwrap(key_b, read_file(args.key_file));
-        ensure(key_b.size() == key.size());
-        std::memcpy(key.data(), key_b.data(), key.size());
-    }
+    auto server_params_received                           = coop::SingleEvent();
+    parser.callbacks.by_type[proto::ServerParameters::pt] = [this, &server_params_received](net::Header header, net::BytesRef payload) -> coop::Async<bool> {
+        constexpr auto error_value = false;
+        co_unwrap_v_mut(request, (serde::load<net::BinaryFormat, proto::ServerParameters>(payload)));
+        args.enc = request.enc;
+        args.mtu = request.mtu;
+        args.tap = request.tap;
+        server_params_received.notify();
+        co_ensure_v(co_await parser.send_packet(proto::Success(), header.id));
+        co_return true;
+    };
 
     auto plink_user_cert = std::string();
     if(args.peer_linker_user_cert_path != nullptr) {
-        unwrap(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
+        coop_unwrap(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
         plink_user_cert = from_span(cert);
     }
-    const auto server_pad_name = std::format("{}_server", args.username);
-    const auto client_pad_name = std::format("{}_client", args.username);
-    const auto plink_params    = p2p::plink::PeerLinkerSessionParams{
-           .peer_linker                   = p2p::ServerLocation{args.peer_linker_addr, args.peer_linker_port},
-           .pad_name                      = args.server ? server_pad_name : client_pad_name,
-           .target_pad_name               = args.server ? "" : std::string_view(server_pad_name),
-           .user_certificate              = plink_user_cert,
-           .peer_linker_allow_self_signed = true,
+    auto params = plink::PeerLinkerClientBackend::Params{
+        .peer_linker_addr = args.peer_linker_addr,
+        .peer_linker_port = args.peer_linker_port,
+        .user_certificate = std::move(plink_user_cert),
     };
+    if(args.server) {
+        params.pad_name = std::format("{}_server", args.username);
+    } else {
+        params.pad_name  = std::format("{}_client", args.username);
+        params.peer_info = plink::PeerLinkerClientBackend::Params::PeerInfo{
+            .pad_name = std::format("{}_server", args.username),
+        };
+    }
+    coop_ensure(co_await backend->connect(std::move(params)));
 
     if(args.server) {
-        std::println("waiting for client");
-    }
-    ensure(p2p::plink::PeerLinkerSession::start(plink_params));
-
-    if(args.server) {
-        ensure(send_packet(proto::Type::ServerParameters, int(args.enc_method), uint16_t(args.mtu), uint8_t(args.ws_only), uint8_t(args.tap)));
+        coop_ensure(co_await parser.receive_response<proto::Success>(proto::ServerParameters{args.enc, args.mtu, args.tap}))
     } else {
-        ensure(events.wait_for(EventKind::ServerParameters));
-    }
-    if(args.enc_method != EncMethod::None) {
-        enc_context.reset(crypto::alloc_cipher_context());
-        dec_context.reset(crypto::alloc_cipher_context());
-    } else {
-        std::println(stderr, "no private key provided, continuing without encryption");
+        co_await server_params_received;
     }
 
-    unwrap(dev, setup_virtual_nic({
-                    .address = args.address,
-                    .mask    = args.mask,
-                    .mtu     = args.mtu,
-                    .tap     = args.tap,
-                }));
-    this->dev = FileDescriptor(dev);
+    coop_unwrap(dev, setup_virtual_nic({
+                         .address = args.address,
+                         .mask    = args.mask,
+                         .mtu     = args.mtu,
+                         .tap     = args.tap,
+                     }));
+    this->vnic = FileDescriptor(dev);
 
-    if(args.ws_only) {
-        return true;
-    }
-
-    ensure(p2p::ice::IceSession::start_ice({{"stun.l.google.com", 19302}, {}}, plink_params));
-
-    std::println("adjusting mtu");
-    juice_set_log_level(JUICE_LOG_LEVEL_ERROR); // supress libjuice warnings while adjusting mtu
-    unwrap_mut(mtu, get_mtu(dev));
-    const auto overhead = get_packet_overhead(args);
-    const auto buffer   = std::vector<std::byte>(mtu + overhead);
-    while(mtu > 500) {
-        const auto result = send_packet_p2p(p2p::proto::build_packet(proto::Type::Nop, 0, std::span{buffer.data(), mtu + overhead}));
-        if(result == p2p::ice::SendResult::Success) {
-            break;
-        }
-        ensure(result == p2p::ice::SendResult::MessageTooLarge);
-        mtu -= 10;
-        ensure(set_mtu(dev, mtu));
-    }
-    juice_set_log_level(JUICE_LOG_LEVEL_WARN);
-    std::println("mtu adjusted to {}", mtu);
-
-    return true;
+    co_return true;
 }
 
-auto Session::run() -> bool {
-    auto buf = std::array<char, 1536>();
-    auto fds = std::array{
-        pollfd{.fd = dev.as_handle(), .events = POLLIN},
-        pollfd{.fd = stop, .events = POLLIN},
-    };
+auto ShortWire::vnic_reader_main() -> bool {
+    auto buf           = std::array<std::byte, 1536>();
+    auto enc_context   = crypto::AutoCipherContext(crypto::alloc_cipher_context());
+    auto random_engine = RandomEngine();
+    auto cleaner       = Cleaner{[] { PANIC("vnic reader panicked"); }};
 loop:
-    ensure(poll(fds.data(), fds.size(), -1) != -1);
-    if(fds[0].revents & POLLIN) {
-        const auto len = read(fds[0].fd, buf.data(), buf.size());
-        ensure(len > 0);
+    const auto len = read(vnic.as_handle(), buf.data(), buf.size());
+    ensure(len > 0);
 
-        auto payload   = std::span<std::byte>((std::byte*)buf.data(), size_t(len));
-        auto encrypted = std::vector<std::byte>();
-        switch(args.enc_method) {
-        case EncMethod::None:
-            break;
-        case EncMethod::AES: {
-            const auto iv = random_engine.generate<crypto::aes::iv_len>();
-            unwrap_mut(enc, crypto::aes::encrypt(enc_context.get(), key, iv, payload));
-            encrypted = concat(iv, enc);
-            payload   = encrypted;
-        } break;
-        case EncMethod::C20P1305: {
-            const auto iv = random_engine.generate<crypto::c20p1305::iv_len>();
-            unwrap_mut(enc, crypto::c20p1305::encrypt(enc_context.get(), key, iv, payload));
-            encrypted = concat(iv, enc);
-            payload   = encrypted;
-        } break;
-        }
-
-        if(args.ws_only) {
-            send_generic_packet(proto::Type::Datagram, 0, payload);
-        } else {
-            send_packet_p2p(p2p::proto::build_packet(proto::Type::Datagram, 0, payload));
-        }
+    auto payload   = net::BytesRef{buf.data(), size_t(len)};
+    auto encrypted = net::BytesArray();
+    switch(args.enc) {
+    case EncMethod::None:
+        break;
+    case EncMethod::AES: {
+        const auto iv = random_engine.generate<crypto::aes::iv_len>();
+        unwrap_mut(enc, crypto::aes::encrypt(enc_context.get(), key, iv, payload));
+        encrypted = concat(iv, enc);
+        payload   = encrypted;
+    } break;
+    case EncMethod::C20P1305: {
+        const auto iv = random_engine.generate<crypto::c20p1305::iv_len>();
+        unwrap_mut(enc, crypto::c20p1305::encrypt(enc_context.get(), key, iv, payload));
+        encrypted = concat(iv, enc);
+        payload   = encrypted;
+    } break;
     }
-    if(fds[1].revents & POLLIN) {
-        return true;
+
+    std::println("size={}", payload.size());
+    if(const auto ret = p2p.send_data(payload); ret != p2p::SendResult::Success) {
+        WARN("send failed: {}", std::to_underlying(ret));
     }
     goto loop;
 }
 
-Session::Session(Args args)
-    : args(args) {
+auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
+    if(args.enc != EncMethod::None) {
+        dec_context.reset(crypto::alloc_cipher_context());
+    } else {
+        WARN("no private key provided, continuing without encryption");
+    }
+    if(args.key_file != nullptr) {
+        coop_unwrap(key_b, read_file(args.key_file));
+        coop_ensure(key_b.size() == key.size());
+        std::memcpy(key.data(), key_b.data(), key.size());
+    }
+
+    parser.send_data = [this](net::BytesRef data) -> coop::Async<bool> {
+        return backend->send(data);
+    };
+
+    p2p.on_disconnected  = []() { std::quick_exit(1); };
+    p2p.on_received      = [this](net::BytesRef data) { handle_datagram(data); };
+    p2p.parser.send_data = [this](net::BytesRef data) -> coop::Async<bool> {
+        return parser.send_packet(proto::Signaling::pt, data.data(), data.size());
+    };
+
+    auto params = p2p::Connection::Params{
+        .injector      = &injector,
+        .start_backend = [this] -> coop::Async<bool> { return this->start_backend(); },
+        .stun_addr     = "stun.l.google.com",
+        .stun_port     = 19302,
+        .controlling   = !args.server,
+    };
+    coop_ensure(co_await p2p.connect(std::move(params)));
+
+    std::println("connected");
+
+    co_await coop::run_blocking([this] { vnic_reader_main(); });
+
+    co_return true;
+}
+
+auto async_main(const int argc, const char* const* argv) -> coop::Async<void> {
+    coop_unwrap(args, Args::parse(argc, argv));
+    auto shortwire = ShortWire{args};
+    auto injector  = coop::TaskInjector(*co_await coop::reveal_runner());
+    if(!co_await shortwire.run(injector)) {
+        PANIC("connection failed");
+    }
 }
 } // namespace
 
-auto main(const int argc, const char* const argv[]) -> int {
-    unwrap(args, Args::parse(argc, argv));
-
-    ws::set_log_level(0b11);
-    // juice_set_log_level(JUICE_LOG_LEVEL_INFO);
-    auto session = Session(args);
-    ensure(session.start());
-    std::println("ready");
-    ensure(session.run());
+auto main(const int argc, const char* const* argv) -> int {
+    auto runner = coop::Runner();
+    runner.push_task(async_main(argc, argv));
+    runner.run();
     return 0;
 }
