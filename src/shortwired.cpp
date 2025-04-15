@@ -90,7 +90,6 @@ auto ShortWire::start_backend() -> coop::Async<bool> {
     backend->on_closed       = []() { std::quick_exit(1); };
     backend->on_received     = [this](net::BytesRef data) -> coop::Async<void> {
         const auto parsed = parser.parse_received(data);
-        std::println("parsed? {}", parsed.has_value());
         if(!parsed) {
             co_return;
         }
@@ -98,7 +97,6 @@ auto ShortWire::start_backend() -> coop::Async<bool> {
         if(!co_await handle_parsed(header, payload) && header.type != proto::Error::pt) {
             co_await parser.send_packet(proto::Error(), header.id);
         }
-        std::println("done");
     };
 
     auto server_params_received                           = coop::SingleEvent();
@@ -178,7 +176,6 @@ loop:
     } break;
     }
 
-    std::println("size={}", payload.size());
     if(const auto ret = p2p.send_data(payload); ret != p2p::SendResult::Success) {
         WARN("send failed: {}", std::to_underlying(ret));
     }
