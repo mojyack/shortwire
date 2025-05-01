@@ -39,7 +39,6 @@ struct ShortWire {
 
     auto handle_parsed(net::Header header, net::BytesRef payload) -> coop::Async<bool>;
     auto handle_datagram(net::BytesRef data) -> bool;
-    auto start_backend() -> coop::Async<bool>;
     auto vnic_reader_main() -> bool;
 
     auto run(coop::TaskInjector& injector) -> coop::Async<bool>;
@@ -83,77 +82,6 @@ auto ShortWire::handle_datagram(net::BytesRef data) -> bool {
     return true;
 }
 
-auto ShortWire::start_backend() -> coop::Async<bool> {
-    auto backend = new plink::PeerLinkerClientBackend();
-    this->backend.reset(backend);
-    backend->on_auth_request = [this](std::string_view name, net::BytesRef) { return name == std::format("{}_client", args.username); };
-    backend->on_closed       = []() { std::quick_exit(1); };
-    backend->on_received     = [this](net::BytesRef data) -> coop::Async<void> {
-        const auto parsed = parser.parse_received(data);
-        if(!parsed) {
-            co_return;
-        }
-        const auto& [header, payload] = *parsed;
-        if(!co_await handle_parsed(header, payload) && header.type != proto::Error::pt) {
-            co_await parser.send_packet(proto::Error(), header.id);
-        }
-    };
-
-    auto server_params_received                           = coop::SingleEvent();
-    parser.callbacks.by_type[proto::ServerParameters::pt] = [this, &server_params_received](net::Header header, net::BytesRef payload) -> coop::Async<bool> {
-        constexpr auto error_value = false;
-        co_unwrap_v_mut(request, (serde::load<net::BinaryFormat, proto::ServerParameters>(payload)));
-        args.enc = request.enc;
-        args.mtu = request.mtu;
-        args.tap = request.tap;
-        server_params_received.notify();
-        co_ensure_v(co_await parser.send_packet(proto::Success(), header.id));
-        co_return true;
-    };
-
-    auto plink_user_cert = std::string();
-    if(args.peer_linker_user_cert_path != nullptr) {
-        coop_unwrap(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
-        plink_user_cert = from_span(cert);
-    }
-    auto params = plink::PeerLinkerClientBackend::Params{
-        .peer_linker_addr = args.peer_linker_addr,
-        .peer_linker_port = args.peer_linker_port,
-        .user_certificate = std::move(plink_user_cert),
-    };
-    if(args.server) {
-        params.pad_name = std::format("{}_server", args.username);
-    } else {
-        params.pad_name  = std::format("{}_client", args.username);
-        params.peer_info = plink::PeerLinkerClientBackend::Params::PeerInfo{
-            .pad_name = std::format("{}_server", args.username),
-        };
-    }
-    coop_ensure(co_await backend->connect(std::move(params)));
-
-    if(args.server) {
-        coop_ensure(co_await parser.receive_response<proto::Success>(proto::ServerParameters{args.enc, args.mtu, args.tap}))
-    } else {
-        co_await server_params_received;
-    }
-
-    if(args.enc != EncMethod::None) {
-        dec_context.reset(crypto::alloc_cipher_context());
-    } else {
-        WARN("no private key provided, continuing without encryption");
-    }
-
-    coop_unwrap(dev, setup_virtual_nic({
-                         .address = args.address,
-                         .mask    = args.mask,
-                         .mtu     = args.mtu,
-                         .tap     = args.tap,
-                     }));
-    this->vnic = FileDescriptor(dev);
-
-    co_return true;
-}
-
 auto ShortWire::vnic_reader_main() -> bool {
     auto buf           = std::array<std::byte, 1536>();
     auto enc_context   = crypto::AutoCipherContext(crypto::alloc_cipher_context());
@@ -189,32 +117,111 @@ loop:
 }
 
 auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
-    if(args.key_file != nullptr) {
-        coop_unwrap(key_b, read_file(args.key_file));
-        coop_ensure(key_b.size() == key.size());
-        std::memcpy(key.data(), key_b.data(), key.size());
-    }
+    // setup parser
+    auto server_params_received = coop::SingleEvent();
+    auto signaling_ready        = coop::SingleEvent();
 
     parser.send_data = [this](net::BytesRef data) -> coop::Async<bool> {
         return backend->send(data);
     };
+    parser.callbacks.by_type[proto::StartSignaling::pt] = [this, &signaling_ready](net::Header header, net::BytesRef /*payload*/) -> coop::Async<bool> {
+        constexpr auto error_value = false;
+        signaling_ready.notify();
+        co_ensure_v(co_await parser.send_packet(proto::Success(), header.id));
+        co_return true;
+    };
+    parser.callbacks.by_type[proto::ServerParameters::pt] = [this, &server_params_received](net::Header header, net::BytesRef payload) -> coop::Async<bool> {
+        constexpr auto error_value = false;
+        co_unwrap_v_mut(request, (serde::load<net::BinaryFormat, proto::ServerParameters>(payload)));
+        args.enc = request.enc;
+        args.mtu = request.mtu;
+        args.tap = request.tap;
+        server_params_received.notify();
+        co_ensure_v(co_await parser.send_packet(proto::Success(), header.id));
+        co_return true;
+    };
 
+    // setup backend
+    auto backend = new plink::PeerLinkerClientBackend();
+    this->backend.reset(backend);
+    backend->on_auth_request = [this](std::string_view name, net::BytesRef) { return name == std::format("{}_client", args.username); };
+    backend->on_closed       = []() { std::quick_exit(1); };
+    backend->on_received     = [this](net::BytesRef data) -> coop::Async<void> {
+        const auto parsed = parser.parse_received(data);
+        if(!parsed) {
+            co_return;
+        }
+        const auto& [header, payload] = *parsed;
+        if(!co_await handle_parsed(header, payload) && header.type != proto::Error::pt) {
+            co_await parser.send_packet(proto::Error(), header.id);
+        }
+    };
+
+    // start backend
+    auto plink_user_cert = std::string();
+    if(args.peer_linker_user_cert_path != nullptr) {
+        coop_unwrap(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
+        plink_user_cert = from_span(cert);
+    }
+    auto params = plink::PeerLinkerClientBackend::Params{
+        .peer_linker_addr = args.peer_linker_addr,
+        .peer_linker_port = args.peer_linker_port,
+        .user_certificate = std::move(plink_user_cert),
+    };
+    if(args.server) {
+        params.pad_name = std::format("{}_server", args.username);
+    } else {
+        params.pad_name  = std::format("{}_client", args.username);
+        params.peer_info = plink::PeerLinkerClientBackend::Params::PeerInfo{
+            .pad_name = std::format("{}_server", args.username),
+        };
+    }
+    coop_ensure(co_await backend->connect(std::move(params)));
+    std::println("backend ready");
+
+    // exchange parameters
+    if(args.server) {
+        coop_ensure(co_await parser.receive_response<proto::Success>(proto::ServerParameters{args.enc, args.mtu, args.tap}))
+    } else {
+        co_await server_params_received;
+    }
+    if(args.enc != EncMethod::None) {
+        dec_context.reset(crypto::alloc_cipher_context());
+        coop_ensure(args.key_file != nullptr, "private key required");
+        coop_unwrap(key_b, read_file(args.key_file));
+        coop_ensure(key_b.size() == key.size());
+        std::memcpy(key.data(), key_b.data(), key.size());
+    } else {
+        WARN("continuing without encryption");
+    }
+
+    // setup p2p
     p2p.on_disconnected  = []() { std::quick_exit(1); };
     p2p.on_received      = [this](net::BytesRef data) { handle_datagram(data); };
     p2p.parser.send_data = [this](net::BytesRef data) -> coop::Async<bool> {
         return parser.send_packet(proto::Signaling::pt, data.data(), data.size());
     };
-
-    auto params = p2p::Connection::Params{
+    coop_ensure(co_await p2p.connect({
         .injector      = &injector,
-        .start_backend = [this] -> coop::Async<bool> { return this->start_backend(); },
-        .stun_addr     = "stun.l.google.com",
-        .stun_port     = 19302,
-        .controlling   = !args.server,
-    };
-    coop_ensure(co_await p2p.connect(std::move(params)));
-
+        .start_backend = [&] -> coop::Async<bool> {
+            constexpr auto error_value = false;
+            co_ensure_v(co_await parser.receive_response<proto::Success>(proto::StartSignaling{}));
+            co_await signaling_ready; // wait for remote start_backend
+            co_return true;
+        },
+        .stun_addr   = "stun.l.google.com",
+        .stun_port   = 19302,
+        .controlling = !args.server,
+    }));
     std::println("connected");
+
+    coop_unwrap(dev, setup_virtual_nic({
+                         .address = args.address,
+                         .mask    = args.mask,
+                         .mtu     = args.mtu,
+                         .tap     = args.tap,
+                     }));
+    this->vnic = FileDescriptor(dev);
 
     co_await coop::run_blocking([this] { vnic_reader_main(); });
 

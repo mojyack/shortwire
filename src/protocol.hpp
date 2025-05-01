@@ -11,8 +11,12 @@ struct Error {
     constexpr static auto pt = net::PacketID(0x01);
 };
 
-struct Signaling {
+struct StartSignaling {
     constexpr static auto pt = net::PacketID(0x02);
+};
+
+struct Signaling {
+    constexpr static auto pt = net::PacketID(0x03);
 
     SerdeFieldsBegin;
     net::BytesArray SerdeField(payload);
@@ -20,7 +24,7 @@ struct Signaling {
 };
 
 struct ServerParameters {
-    constexpr static auto pt = net::PacketID(0x03);
+    constexpr static auto pt = net::PacketID(0x04);
 
     SerdeFieldsBegin;
     EncMethod SerdeField(enc);
@@ -30,6 +34,6 @@ struct ServerParameters {
 };
 
 struct Nop {
-    constexpr static auto pt = net::PacketID(0x04);
+    constexpr static auto pt = net::PacketID(0x05);
 };
 } // namespace proto
