@@ -176,6 +176,7 @@ auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
             .pad_name = std::format("{}_server", args.username),
         };
     }
+    std::println("waiting for peer");
     coop_ensure(co_await backend->connect(std::move(params)));
     std::println("backend ready");
 
