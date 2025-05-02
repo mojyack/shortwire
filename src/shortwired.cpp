@@ -181,8 +181,9 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
         co_return true;
     };
     parser.callbacks.by_type[proto::CalibrationDone::pt] = [this, &calibration_done](net::Header header, net::BytesRef /*payload*/) -> coop::Async<bool> {
+        co_ensure_v(co_await parser.send_packet(proto::Success(), header.id));
         calibration_done.notify();
-        return parser.send_packet(proto::Success(), header.id);
+        co_return true;
     };
 
     // setup backend
@@ -285,12 +286,12 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
     coop_ensure(calibrate_mtu());
     coop_ensure(co_await parser.receive_response<proto::Success>(proto::CalibrationDone{}));
     co_await calibration_done;
+    std::println("ready");
     p2p.on_received = [this](net::BytesRef data) { handle_datagram(data); };
 
     // backend is no longer used
     parser.send_data = [&](net::BytesRef) -> coop::Async<bool> {
-        WARN("no more data expected");
-        co_return false;
+        co_bail_v("no more data expected");
     };
     backend->on_closed = [] {};
 
