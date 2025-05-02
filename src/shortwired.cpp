@@ -30,23 +30,19 @@ auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) ->
     return {iv, enc};
 }
 
-auto runner   = coop::Runner();
-auto injector = coop::TaskInjector(runner);
-
 struct ShortWire {
-    Args                                args;
-    std::unique_ptr<net::ClientBackend> backend;
-    net::PacketParser                   parser;
-    p2p::Connection                     p2p;
-    FileDescriptor                      vnic;
-    crypto::AutoCipherContext           dec_context;
-    Key                                 key;
+    Args                      args;
+    net::PacketParser         parser;
+    p2p::Connection           p2p;
+    FileDescriptor            vnic;
+    crypto::AutoCipherContext dec_context;
+    Key                       key;
 
     auto handle_parsed(net::Header header, net::BytesRef payload) -> coop::Async<bool>;
     auto handle_datagram(net::BytesRef data) -> bool;
     auto vnic_reader_main() -> bool;
 
-    auto run(coop::TaskInjector& injector) -> coop::Async<bool>;
+    auto connect(coop::TaskInjector& injector) -> coop::Async<bool>;
 };
 
 auto ShortWire::handle_parsed(net::Header header, net::BytesRef payload) -> coop::Async<bool> {
@@ -121,12 +117,14 @@ loop:
     goto loop;
 }
 
-auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
+auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
+    auto backend = std::unique_ptr<net::ClientBackend>();
+
     // setup parser
     auto server_params_received = coop::SingleEvent();
     auto signaling_ready        = coop::SingleEvent();
 
-    parser.send_data = [this](net::BytesRef data) -> coop::Async<bool> {
+    parser.send_data = [&](net::BytesRef data) -> coop::Async<bool> {
         return backend->send(data);
     };
     parser.callbacks.by_type[proto::StartSignaling::pt] = [this, &signaling_ready](net::Header header, net::BytesRef /*payload*/) -> coop::Async<bool> {
@@ -148,12 +146,12 @@ auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
 
     // setup backend
     if(args.sig_method.get<PeerLinkerArgs>() != nullptr) {
-        auto backend             = new plink::PeerLinkerClientBackend();
-        backend->on_auth_request = [this](std::string_view name, net::BytesRef) { return name == std::format("{}_client", args.username); };
-        this->backend.reset(backend);
+        auto impl             = new plink::PeerLinkerClientBackend();
+        impl->on_auth_request = [this](std::string_view name, net::BytesRef) { return name == std::format("{}_client", args.username); };
+        backend.reset(impl);
     } else {
-        auto backend = new net::discord::DiscordClient();
-        this->backend.reset(backend);
+        auto impl = new net::discord::DiscordClient();
+        backend.reset(impl);
     }
     backend->on_closed   = []() { std::quick_exit(1); };
     backend->on_received = [this](net::BytesRef data) -> coop::Async<void> {
@@ -244,23 +242,30 @@ auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
     }));
     std::println("connected");
 
-    co_await coop::run_blocking([this] { vnic_reader_main(); });
+    // backend is no longer used
+    parser.send_data = [&](net::BytesRef) -> coop::Async<bool> {
+        WARN("no more data expected");
+        co_return false;
+    };
+    backend->on_closed = [] {};
 
     co_return true;
 }
-
-auto async_main(const int argc, const char* const* argv) -> coop::Async<void> {
-    coop_unwrap(args, Args::parse(argc, argv));
-    auto shortwire = ShortWire{args};
-    auto injector  = coop::TaskInjector(*co_await coop::reveal_runner());
-    if(!co_await shortwire.run(injector)) {
-        PANIC("connection failed");
-    }
-}
 } // namespace
 
-auto main(const int argc, const char* const* argv) -> int {
-    runner.push_task(async_main(argc, argv));
-    runner.run();
+auto main(const int argc, const char* const* const argv) -> int {
+    unwrap(args, Args::parse(argc, argv));
+    auto shortwire = ShortWire{args};
+    {
+        auto runner   = coop::Runner();
+        auto injector = coop::TaskInjector(runner);
+        auto setup    = [&] -> coop::Async<void> {
+            ASSERT(co_await shortwire.connect(injector));
+            injector.blocker.stop();
+        };
+        runner.push_task(setup());
+        runner.run();
+    }
+    shortwire.vnic_reader_main();
     return 0;
 }
