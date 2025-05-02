@@ -2,24 +2,37 @@
 #include <cstdint>
 #include <optional>
 
+#include "util/variant.hpp"
+
 enum class EncMethod {
     None,
     AES,
     C20P1305,
 };
 
-struct Args {
-    const char* username                   = nullptr;
-    const char* key_file                   = nullptr;
-    const char* peer_linker_user_cert_path = nullptr;
-    const char* peer_linker_addr;
-    EncMethod   enc = EncMethod::None;
-    uint32_t    address;
-    uint32_t    mask;
-    uint16_t    peer_linker_port = 8080;
-    uint16_t    mtu              = 1400;
-    bool        server           = false;
-    bool        tap              = false;
+struct PeerLinkerArgs {
+    const char* addr;
+    const char* user_cert_path = nullptr;
+    uint16_t    port           = 8080;
+};
 
-    static auto parse(int argc, const char* const argv[]) -> std::optional<Args>;
+struct DiscordArgs {
+    const char* bot_token;
+    uint64_t    channel_id;
+};
+
+using SignalingMethod = Variant<PeerLinkerArgs, DiscordArgs>;
+
+struct Args {
+    const char*     username = nullptr;
+    const char*     key_file = nullptr;
+    SignalingMethod sig_method;
+    EncMethod       enc = EncMethod::None;
+    uint32_t        address;
+    uint32_t        mask;
+    uint16_t        mtu    = 1400;
+    bool            server = false;
+    bool            tap    = false;
+
+    static auto parse(int argc, const char* const* argv) -> std::optional<Args>;
 };

@@ -1,4 +1,5 @@
 #include <coop/generator.hpp>
+#include <coop/task-injector.hpp>
 #include <coop/thread.hpp>
 
 #include "args.hpp"
@@ -7,6 +8,7 @@
 #include "crypto/c20p1305.hpp"
 #include "macros/coop-unwrap.hpp"
 #include "p2p/conn.hpp"
+#include "p2p/net/discord/client.hpp"
 #include "p2p/net/packet-parser.hpp"
 #include "plink/peer-linker-client.hpp"
 #include "protocol.hpp"
@@ -27,6 +29,9 @@ auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) ->
     const auto enc = data.subspan(iv_len);
     return {iv, enc};
 }
+
+auto runner   = coop::Runner();
+auto injector = coop::TaskInjector(runner);
 
 struct ShortWire {
     Args                                args;
@@ -142,11 +147,16 @@ auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
     };
 
     // setup backend
-    auto backend = new plink::PeerLinkerClientBackend();
-    this->backend.reset(backend);
-    backend->on_auth_request = [this](std::string_view name, net::BytesRef) { return name == std::format("{}_client", args.username); };
-    backend->on_closed       = []() { std::quick_exit(1); };
-    backend->on_received     = [this](net::BytesRef data) -> coop::Async<void> {
+    if(args.sig_method.get<PeerLinkerArgs>() != nullptr) {
+        auto backend             = new plink::PeerLinkerClientBackend();
+        backend->on_auth_request = [this](std::string_view name, net::BytesRef) { return name == std::format("{}_client", args.username); };
+        this->backend.reset(backend);
+    } else {
+        auto backend = new net::discord::DiscordClient();
+        this->backend.reset(backend);
+    }
+    backend->on_closed   = []() { std::quick_exit(1); };
+    backend->on_received = [this](net::BytesRef data) -> coop::Async<void> {
         const auto parsed = parser.parse_received(data);
         if(!parsed) {
             co_return;
@@ -158,26 +168,36 @@ auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
     };
 
     // start backend
-    auto plink_user_cert = std::string();
-    if(args.peer_linker_user_cert_path != nullptr) {
-        coop_unwrap(cert, read_file(args.peer_linker_user_cert_path), "failed to read user certificate");
-        plink_user_cert = from_span(cert);
-    }
-    auto params = plink::PeerLinkerClientBackend::Params{
-        .peer_linker_addr = args.peer_linker_addr,
-        .peer_linker_port = args.peer_linker_port,
-        .user_certificate = std::move(plink_user_cert),
-    };
-    if(args.server) {
-        params.pad_name = std::format("{}_server", args.username);
-    } else {
-        params.pad_name  = std::format("{}_client", args.username);
-        params.peer_info = plink::PeerLinkerClientBackend::Params::PeerInfo{
-            .pad_name = std::format("{}_server", args.username),
-        };
-    }
+    const auto server_name = std::format("{}_server", args.username);
+    const auto client_name = std::format("{}_client", args.username);
     std::println("waiting for peer");
-    coop_ensure(co_await backend->connect(std::move(params)));
+    if(const auto method = args.sig_method.get<PeerLinkerArgs>()) {
+        auto plink_user_cert = std::string();
+        if(method->user_cert_path != nullptr) {
+            coop_unwrap(cert, read_file(method->user_cert_path), "failed to read user certificate");
+            plink_user_cert = from_span(cert);
+        }
+        auto params = plink::PeerLinkerClientBackend::Params{
+            .peer_linker_addr = method->addr,
+            .peer_linker_port = method->port,
+            .user_certificate = std::move(plink_user_cert),
+        };
+        if(args.server) {
+            params.pad_name = server_name;
+        } else {
+            params.pad_name  = client_name;
+            params.peer_info = plink::PeerLinkerClientBackend::Params::PeerInfo{
+                .pad_name = server_name,
+            };
+        }
+        coop_ensure(co_await std::bit_cast<plink::PeerLinkerClientBackend*>(backend.get())->connect(std::move(params)));
+    } else if(const auto method = args.sig_method.get<DiscordArgs>()) {
+        auto& name_1 = args.server ? server_name : client_name;
+        auto& name_2 = args.server ? client_name : server_name;
+        coop_ensure(co_await std::bit_cast<net::discord::DiscordClient*>(backend.get())->connect(name_1, name_2, method->channel_id, method->bot_token, injector));
+    } else {
+        PANIC();
+    }
     std::println("backend ready");
 
     // exchange parameters
@@ -196,6 +216,15 @@ auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
         WARN("continuing without encryption");
     }
 
+    // create virtual nic
+    coop_unwrap(dev, setup_virtual_nic({
+                         .address = args.address,
+                         .mask    = args.mask,
+                         .mtu     = args.mtu,
+                         .tap     = args.tap,
+                     }));
+    this->vnic = FileDescriptor(dev);
+
     // setup p2p
     p2p.on_disconnected  = []() { std::quick_exit(1); };
     p2p.on_received      = [this](net::BytesRef data) { handle_datagram(data); };
@@ -203,7 +232,6 @@ auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
         return parser.send_packet(proto::Signaling::pt, data.data(), data.size());
     };
     coop_ensure(co_await p2p.connect({
-        .injector      = &injector,
         .start_backend = [&] -> coop::Async<bool> {
             constexpr auto error_value = false;
             co_ensure_v(co_await parser.receive_response<proto::Success>(proto::StartSignaling{}));
@@ -215,14 +243,6 @@ auto ShortWire::run(coop::TaskInjector& injector) -> coop::Async<bool> {
         .controlling = !args.server,
     }));
     std::println("connected");
-
-    coop_unwrap(dev, setup_virtual_nic({
-                         .address = args.address,
-                         .mask    = args.mask,
-                         .mtu     = args.mtu,
-                         .tap     = args.tap,
-                     }));
-    this->vnic = FileDescriptor(dev);
 
     co_await coop::run_blocking([this] { vnic_reader_main(); });
 
@@ -240,7 +260,6 @@ auto async_main(const int argc, const char* const* argv) -> coop::Async<void> {
 } // namespace
 
 auto main(const int argc, const char* const* argv) -> int {
-    auto runner = coop::Runner();
     runner.push_task(async_main(argc, argv));
     runner.run();
     return 0;

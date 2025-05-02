@@ -1,4 +1,4 @@
-cutil https://github.com/mojyack/cutil.git 727f2eb4fced457d3b8ccf21e82408a3a4fa3df5
+cutil https://github.com/mojyack/cutil.git e8e18f7ff14979d455b930eeffd39937c807fdfd
 cutil-macros https://github.com/mojyack/cutil-macros.git 986ced60b3c5c99364201f83a26ee5433a91a5f8
-peer-linker https://github.com/mojyack/peer-linker.git b9dafc347098f19914720bf116aef04ab213d6c8
-datachannel-cpp https://github.com/mojyack/datachannel-cpp.git 0fb905ce8576aa40567a5172445cf12be452466f
+peer-linker https://github.com/mojyack/peer-linker.git 8a327fa383d2c1db41f113241984ea624b6cdb7a
+datachannel-cpp https://github.com/mojyack/datachannel-cpp.git 36c58dc3847911a5b5cdb2cc213f76d997299ecf
