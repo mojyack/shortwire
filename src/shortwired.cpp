@@ -30,6 +30,18 @@ auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) ->
     return {iv, enc};
 }
 
+auto get_packet_overhead(const bool tap, const EncMethod enc) -> size_t {
+    const auto header_len = tap ? 14 : 0;
+    switch(enc) {
+    case EncMethod::None:
+        return header_len;
+    case EncMethod::AES:
+        return header_len + crypto::aes::iv_len + crypto::aes::block_len; // +block_len is worst case
+    case EncMethod::C20P1305:
+        return header_len + crypto::c20p1305::iv_len + crypto::c20p1305::tag_len;
+    }
+}
+
 struct ShortWire {
     Args                      args;
     net::PacketParser         parser;
@@ -39,6 +51,7 @@ struct ShortWire {
     Key                       key;
 
     auto handle_parsed(net::Header header, net::BytesRef payload) -> coop::Async<bool>;
+    auto calibrate_mtu() -> bool;
     auto handle_datagram(net::BytesRef data) -> bool;
     auto vnic_reader_main() -> bool;
 
@@ -50,13 +63,35 @@ auto ShortWire::handle_parsed(net::Header header, net::BytesRef payload) -> coop
     case proto::Signaling::pt:
         coop_ensure(co_await p2p.push_signaling_data(payload));
         break;
-    case proto::Nop::pt:
-        break;
     default:
         coop_ensure(co_await parser.callbacks.invoke(header, payload));
         break;
     }
     co_return true;
+}
+
+auto ShortWire::calibrate_mtu() -> bool {
+    juice_set_log_level(JUICE_LOG_LEVEL_ERROR);
+    unwrap_mut(mtu, get_mtu(vnic.as_handle()));
+    const auto overhead = get_packet_overhead(args.tap, args.enc);
+    while(mtu > 500) {
+        switch(p2p.send_data(net::BytesArray(mtu + overhead))) {
+        case p2p::SendResult::Success:
+            goto finish;
+        case p2p::SendResult::MessageTooLarge:
+            mtu -= 10;
+            ensure(set_mtu(vnic.as_handle(), mtu));
+            break;
+        case p2p::SendResult::WouldBlock:
+            break;
+        case p2p::SendResult::UnknownError:
+            bail("send failed");
+        }
+    }
+finish:
+    std::println("mtu calibrate to {}", mtu);
+    juice_set_log_level(JUICE_LOG_LEVEL_WARN);
+    return true;
 }
 
 auto ShortWire::handle_datagram(net::BytesRef data) -> bool {
@@ -113,35 +148,41 @@ loop:
 
     if(const auto ret = p2p.send_data(payload); ret != p2p::SendResult::Success) {
         WARN("send failed: {}", std::to_underlying(ret));
+        if(ret == p2p::SendResult::MessageTooLarge) {
+            ensure(calibrate_mtu());
+        }
     }
     goto loop;
 }
 
 auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
+    constexpr auto error_value = false;
+
     auto backend = std::unique_ptr<net::ClientBackend>();
 
     // setup parser
     auto server_params_received = coop::SingleEvent();
     auto signaling_ready        = coop::SingleEvent();
+    auto calibration_done       = coop::SingleEvent();
 
     parser.send_data = [&](net::BytesRef data) -> coop::Async<bool> {
         return backend->send(data);
     };
     parser.callbacks.by_type[proto::StartSignaling::pt] = [this, &signaling_ready](net::Header header, net::BytesRef /*payload*/) -> coop::Async<bool> {
-        constexpr auto error_value = false;
         signaling_ready.notify();
-        co_ensure_v(co_await parser.send_packet(proto::Success(), header.id));
-        co_return true;
+        return parser.send_packet(proto::Success(), header.id);
     };
     parser.callbacks.by_type[proto::ServerParameters::pt] = [this, &server_params_received](net::Header header, net::BytesRef payload) -> coop::Async<bool> {
-        constexpr auto error_value = false;
         co_unwrap_v_mut(request, (serde::load<net::BinaryFormat, proto::ServerParameters>(payload)));
         args.enc = request.enc;
-        args.mtu = request.mtu;
         args.tap = request.tap;
         server_params_received.notify();
         co_ensure_v(co_await parser.send_packet(proto::Success(), header.id));
         co_return true;
+    };
+    parser.callbacks.by_type[proto::CalibrationDone::pt] = [this, &calibration_done](net::Header header, net::BytesRef /*payload*/) -> coop::Async<bool> {
+        calibration_done.notify();
+        return parser.send_packet(proto::Success(), header.id);
     };
 
     // setup backend
@@ -200,7 +241,7 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
 
     // exchange parameters
     if(args.server) {
-        coop_ensure(co_await parser.receive_response<proto::Success>(proto::ServerParameters{args.enc, args.mtu, args.tap}))
+        coop_ensure(co_await parser.receive_response<proto::Success>(proto::ServerParameters{args.enc, args.tap}));
     } else {
         co_await server_params_received;
     }
@@ -218,20 +259,18 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
     coop_unwrap(dev, setup_virtual_nic({
                          .address = args.address,
                          .mask    = args.mask,
-                         .mtu     = args.mtu,
+                         .mtu     = 1500,
                          .tap     = args.tap,
                      }));
     this->vnic = FileDescriptor(dev);
 
     // setup p2p
     p2p.on_disconnected  = []() { std::quick_exit(1); };
-    p2p.on_received      = [this](net::BytesRef data) { handle_datagram(data); };
     p2p.parser.send_data = [this](net::BytesRef data) -> coop::Async<bool> {
         return parser.send_packet(proto::Signaling::pt, data.data(), data.size());
     };
     coop_ensure(co_await p2p.connect({
         .start_backend = [&] -> coop::Async<bool> {
-            constexpr auto error_value = false;
             co_ensure_v(co_await parser.receive_response<proto::Success>(proto::StartSignaling{}));
             co_await signaling_ready; // wait for remote start_backend
             co_return true;
@@ -241,6 +280,12 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
         .controlling = !args.server,
     }));
     std::println("connected");
+
+    // calibrate mtu
+    coop_ensure(calibrate_mtu());
+    coop_ensure(co_await parser.receive_response<proto::Success>(proto::CalibrationDone{}));
+    co_await calibration_done;
+    p2p.on_received = [this](net::BytesRef data) { handle_datagram(data); };
 
     // backend is no longer used
     parser.send_data = [&](net::BytesRef) -> coop::Async<bool> {

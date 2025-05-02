@@ -28,12 +28,11 @@ struct ServerParameters {
 
     SerdeFieldsBegin;
     EncMethod SerdeField(enc);
-    uint16_t  SerdeField(mtu);
     bool      SerdeField(tap);
     SerdeFieldsEnd;
 };
 
-struct Nop {
+struct CalibrationDone {
     constexpr static auto pt = net::PacketID(0x05);
 };
 } // namespace proto

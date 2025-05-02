@@ -64,7 +64,6 @@ auto Args::parse(const int argc, const char* const* const argv) -> std::optional
     parser.kwarg(&args.key_file, {"-k", "--key"}, "FILE", "shared key for encryption", {.state = args::State::Initialized});
     parser.kwflag(&args.server, {"-s", "--server"}, "act as a server");
     parser.kwflag(&args.tap, {"-t", "--tap"}, "server-only: use tap device instead of tun");
-    parser.kwarg(&args.mtu, {"-m", "--mtu"}, "MTU", "server-only: mtu of virtual nic", {.state = args::State::DefaultValue});
     parser.kwflag(&help, {"-h", "--help"}, "print this help message", {.no_error_check = true});
     if(!parser.parse(argc, argv) || help) {
         std::println("usage: shortwired {}", parser.get_help());

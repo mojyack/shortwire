@@ -30,7 +30,6 @@ struct Args {
     EncMethod       enc = EncMethod::None;
     uint32_t        address;
     uint32_t        mask;
-    uint16_t        mtu    = 1400;
     bool            server = false;
     bool            tap    = false;
 
