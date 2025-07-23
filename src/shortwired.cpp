@@ -13,7 +13,6 @@
 #include "plink/peer-linker-client.hpp"
 #include "protocol.hpp"
 #include "util/cleaner.hpp"
-#include "util/concat.hpp"
 #include "util/fd.hpp"
 #include "util/file-io.hpp"
 #include "util/random.hpp"
@@ -154,8 +153,6 @@ auto ShortWire::vnic_reader_main() -> bool {
     auto random_engine = RandomEngine();
     auto cleaner       = Cleaner{[] { PANIC("vnic reader panicked"); }};
 loop:
-    static const auto pt = std::array{proto::P2PPacketType::Payload};
-
     const auto len = read(vnic.as_handle(), buf.data() + 1, buf.size() - 1);
     ensure(len > 0);
 
@@ -168,17 +165,21 @@ loop:
         break;
     case EncMethod::AES: {
         const auto data = net::BytesRef{buf.data() + 1, size_t(len)};
-        const auto iv   = random_engine.generate<crypto::aes::iv_len>();
-        unwrap_mut(enc, crypto::aes::encrypt(enc_context.get(), key, iv, data));
-        encrypted = concat(concat(pt, iv), enc);
-        payload   = encrypted;
+        encrypted.resize(1 /*pt*/ + crypto::aes::iv_len + crypto::aes::calc_encryption_buffer_size(data.size()));
+        const auto iv   = net::BytesRef(std::span(encrypted).subspan(1, crypto::aes::iv_len));
+        const auto dest = net::BytesRef(std::span(encrypted).subspan(1 + crypto::aes::iv_len));
+        random_engine.random_fill_fixed_len<crypto::aes::iv_len>((std::byte*)iv.data());
+        ensure(crypto::aes::encrypt(enc_context.get(), key, iv, data, dest));
+        payload = encrypted;
     } break;
     case EncMethod::C20P1305: {
         const auto data = net::BytesRef{buf.data() + 1, size_t(len)};
-        const auto iv   = random_engine.generate<crypto::c20p1305::iv_len>();
-        unwrap_mut(enc, crypto::c20p1305::encrypt(enc_context.get(), key, iv, data));
-        encrypted = concat(concat(pt, iv), enc);
-        payload   = encrypted;
+        encrypted.resize(1 /*pt*/ + crypto::c20p1305::iv_len + crypto::c20p1305::calc_encryption_buffer_size(data.size()));
+        const auto iv   = net::BytesRef(std::span(encrypted).subspan(1, crypto::c20p1305::iv_len));
+        const auto dest = net::BytesRef(std::span(encrypted).subspan(1 + crypto::c20p1305::iv_len));
+        random_engine.random_fill_fixed_len<crypto::c20p1305::iv_len>((std::byte*)iv.data());
+        ensure(crypto::c20p1305::encrypt(enc_context.get(), key, iv, data, dest));
+        payload = encrypted;
     } break;
     }
 
