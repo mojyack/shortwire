@@ -3,6 +3,7 @@
 #include "p2p/net/common.hpp"
 
 namespace proto {
+// control packets
 struct Success {
     constexpr static auto pt = net::PacketID(0x00);
 };
@@ -32,7 +33,10 @@ struct ServerParameters {
     SerdeFieldsEnd;
 };
 
-struct CalibrationDone {
-    constexpr static auto pt = net::PacketID(0x05);
+// p2p packets
+struct P2PPacketType {
+    constexpr static auto Payload              = std::byte(0x00);
+    constexpr static auto ConnectivityTest     = std::byte(0x01);
+    constexpr static auto ConnectivityResponse = std::byte(0x02);
 };
 } // namespace proto

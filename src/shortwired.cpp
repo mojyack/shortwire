@@ -18,6 +18,7 @@
 #include "util/file-io.hpp"
 #include "util/random.hpp"
 #include "util/span.hpp"
+#include "util/timer-event.hpp"
 
 namespace {
 constexpr auto key_len = 32;
@@ -31,7 +32,7 @@ auto split_iv_enc(const std::span<const std::byte> data, const size_t iv_len) ->
 }
 
 auto get_packet_overhead(const bool tap, const EncMethod enc) -> size_t {
-    const auto header_len = tap ? 14 : 0;
+    const auto header_len = (tap ? 14 : 0) + sizeof(proto::P2PPacketType::Payload);
     switch(enc) {
     case EncMethod::None:
         return header_len;
@@ -49,9 +50,11 @@ struct ShortWire {
     FileDescriptor            vnic;
     crypto::AutoCipherContext dec_context;
     Key                       key;
+    TimerEvent                conn_test_responded;
 
     auto handle_parsed(net::Header header, net::BytesRef payload) -> coop::Async<bool>;
     auto calibrate_mtu() -> bool;
+    auto handle_payload_datagram(net::BytesRef data) -> bool;
     auto handle_datagram(net::BytesRef data) -> bool;
     auto vnic_reader_main() -> bool;
 
@@ -72,29 +75,38 @@ auto ShortWire::handle_parsed(net::Header header, net::BytesRef payload) -> coop
 
 auto ShortWire::calibrate_mtu() -> bool {
     juice_set_log_level(JUICE_LOG_LEVEL_ERROR);
+    const auto log_level_cleaner = Cleaner{[] { juice_set_log_level(JUICE_LOG_LEVEL_WARN); }};
+
     unwrap_mut(mtu, get_mtu(vnic.as_handle()));
     const auto overhead = get_packet_overhead(args.tap, args.enc);
-    while(mtu > 500) {
-        switch(p2p.send_data(net::BytesArray(mtu + overhead))) {
-        case p2p::SendResult::Success:
+    auto       dummy    = net::BytesArray{proto::P2PPacketType::ConnectivityTest};
+loop:
+    ensure(mtu >= 500);
+    dummy.resize(mtu + overhead);
+    conn_test_responded.clear();
+    const auto ret = p2p.send_data(dummy);
+    switch(ret) {
+    case p2p::SendResult::Success:
+        if(conn_test_responded.wait_for(std::chrono::seconds(1))) {
             goto finish;
-        case p2p::SendResult::MessageTooLarge:
-            mtu -= 10;
-            ensure(set_mtu(vnic.as_handle(), mtu));
-            break;
-        case p2p::SendResult::WouldBlock:
-            break;
-        case p2p::SendResult::UnknownError:
-            bail("send failed");
         }
+        [[fallthrough]];
+    case p2p::SendResult::MessageTooLarge:
+        mtu -= 10;
+        ensure(set_mtu(vnic.as_handle(), mtu));
+        break;
+    case p2p::SendResult::WouldBlock:
+        break;
+    case p2p::SendResult::UnknownError:
+        bail("send failed");
     }
+    goto loop;
 finish:
     std::println("mtu calibrate to {}", mtu);
-    juice_set_log_level(JUICE_LOG_LEVEL_WARN);
     return true;
 }
 
-auto ShortWire::handle_datagram(net::BytesRef data) -> bool {
+auto ShortWire::handle_payload_datagram(net::BytesRef data) -> bool {
     auto decrypted = std::vector<std::byte>();
     switch(args.enc) {
     case EncMethod::None:
@@ -118,30 +130,54 @@ auto ShortWire::handle_datagram(net::BytesRef data) -> bool {
     return true;
 }
 
+auto ShortWire::handle_datagram(net::BytesRef data) -> bool {
+    ensure(!data.empty());
+    switch(data[0]) {
+    case proto::P2PPacketType::Payload: {
+        ensure(handle_payload_datagram(data.subspan(1)));
+    } break;
+    case proto::P2PPacketType::ConnectivityTest: {
+        p2p.send_data(std::array{proto::P2PPacketType::ConnectivityResponse});
+    } break;
+    case proto::P2PPacketType::ConnectivityResponse: {
+        conn_test_responded.notify();
+    } break;
+    default:
+        bail("invalid p2p packet: type={:02X}", uint8_t(data[0]));
+    }
+    return true;
+}
+
 auto ShortWire::vnic_reader_main() -> bool {
-    auto buf           = std::array<std::byte, 1536>();
+    auto buf           = std::array<std::byte, 1 /*pt*/ + 1536>{proto::P2PPacketType::Payload};
     auto enc_context   = crypto::AutoCipherContext(crypto::alloc_cipher_context());
     auto random_engine = RandomEngine();
     auto cleaner       = Cleaner{[] { PANIC("vnic reader panicked"); }};
 loop:
-    const auto len = read(vnic.as_handle(), buf.data(), buf.size());
+    static const auto pt = std::array{proto::P2PPacketType::Payload};
+
+    const auto len = read(vnic.as_handle(), buf.data() + 1, buf.size() - 1);
     ensure(len > 0);
 
-    auto payload   = net::BytesRef{buf.data(), size_t(len)};
+    auto payload   = net::BytesRef();
     auto encrypted = net::BytesArray();
+
     switch(args.enc) {
     case EncMethod::None:
+        payload = net::BytesRef{buf.data(), size_t(len) + 1};
         break;
     case EncMethod::AES: {
-        const auto iv = random_engine.generate<crypto::aes::iv_len>();
-        unwrap_mut(enc, crypto::aes::encrypt(enc_context.get(), key, iv, payload));
-        encrypted = concat(iv, enc);
+        const auto data = net::BytesRef{buf.data() + 1, size_t(len)};
+        const auto iv   = random_engine.generate<crypto::aes::iv_len>();
+        unwrap_mut(enc, crypto::aes::encrypt(enc_context.get(), key, iv, data));
+        encrypted = concat(concat(pt, iv), enc);
         payload   = encrypted;
     } break;
     case EncMethod::C20P1305: {
-        const auto iv = random_engine.generate<crypto::c20p1305::iv_len>();
-        unwrap_mut(enc, crypto::c20p1305::encrypt(enc_context.get(), key, iv, payload));
-        encrypted = concat(iv, enc);
+        const auto data = net::BytesRef{buf.data() + 1, size_t(len)};
+        const auto iv   = random_engine.generate<crypto::c20p1305::iv_len>();
+        unwrap_mut(enc, crypto::c20p1305::encrypt(enc_context.get(), key, iv, data));
+        encrypted = concat(concat(pt, iv), enc);
         payload   = encrypted;
     } break;
     }
@@ -163,7 +199,6 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
     // setup parser
     auto server_params_received = coop::SingleEvent();
     auto signaling_ready        = coop::SingleEvent();
-    auto calibration_done       = coop::SingleEvent();
 
     parser.send_data = [&](net::BytesRef data) -> coop::Async<bool> {
         return backend->send(data);
@@ -178,11 +213,6 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
         args.tap = request.tap;
         server_params_received.notify();
         co_ensure_v(co_await parser.send_packet(proto::Success(), header.id));
-        co_return true;
-    };
-    parser.callbacks.by_type[proto::CalibrationDone::pt] = [this, &calibration_done](net::Header header, net::BytesRef /*payload*/) -> coop::Async<bool> {
-        co_ensure_v(co_await parser.send_packet(proto::Success(), header.id));
-        calibration_done.notify();
         co_return true;
     };
 
@@ -266,6 +296,7 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
     this->vnic = FileDescriptor(dev);
 
     // setup p2p
+    p2p.on_received      = [this](net::BytesRef data) { handle_datagram(data); };
     p2p.on_disconnected  = []() { std::quick_exit(1); };
     p2p.parser.send_data = [this](net::BytesRef data) -> coop::Async<bool> {
         return parser.send_packet(proto::Signaling::pt, data.data(), data.size());
@@ -282,18 +313,15 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
     }));
     std::println("connected");
 
-    // calibrate mtu
-    coop_ensure(calibrate_mtu());
-    coop_ensure(co_await parser.receive_response<proto::Success>(proto::CalibrationDone{}));
-    co_await calibration_done;
-    std::println("ready");
-    p2p.on_received = [this](net::BytesRef data) { handle_datagram(data); };
-
     // backend is no longer used
     parser.send_data = [&](net::BytesRef) -> coop::Async<bool> {
         co_bail_v("no more data expected");
     };
     backend->on_closed = [] {};
+
+    // calibrate mtu
+    coop_ensure(calibrate_mtu());
+    std::println("ready");
 
     co_return true;
 }
