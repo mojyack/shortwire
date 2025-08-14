@@ -51,7 +51,6 @@ struct ShortWire {
     Key                       key;
     TimerEvent                conn_test_responded;
 
-    auto handle_parsed(net::Header header, net::BytesRef payload) -> coop::Async<bool>;
     auto calibrate_mtu() -> bool;
     auto handle_payload_datagram(net::BytesRef data) -> bool;
     auto handle_datagram(net::BytesRef data) -> bool;
@@ -59,18 +58,6 @@ struct ShortWire {
 
     auto connect(coop::TaskInjector& injector) -> coop::Async<bool>;
 };
-
-auto ShortWire::handle_parsed(net::Header header, net::BytesRef payload) -> coop::Async<bool> {
-    switch(header.type) {
-    case proto::Signaling::pt:
-        coop_ensure(co_await p2p.push_signaling_data(payload));
-        break;
-    default:
-        coop_ensure(co_await parser.callbacks.invoke(header, payload));
-        break;
-    }
-    co_return true;
-}
 
 auto ShortWire::calibrate_mtu() -> bool {
     juice_set_log_level(JUICE_LOG_LEVEL_ERROR);
@@ -166,18 +153,18 @@ loop:
     case EncMethod::AES: {
         const auto data = net::BytesRef{buf.data() + 1, size_t(len)};
         encrypted.resize(1 /*pt*/ + crypto::aes::iv_len + crypto::aes::calc_encryption_buffer_size(data.size()));
-        const auto iv   = net::BytesRef(std::span(encrypted).subspan(1, crypto::aes::iv_len));
-        const auto dest = net::BytesRef(std::span(encrypted).subspan(1 + crypto::aes::iv_len));
-        random_engine.random_fill_fixed_len<crypto::aes::iv_len>((std::byte*)iv.data());
+        const auto iv   = crypto::MutBytesRef(std::span(encrypted).subspan(1, crypto::aes::iv_len));
+        const auto dest = crypto::MutBytesRef(std::span(encrypted).subspan(1 + crypto::aes::iv_len));
+        random_engine.random_fill_fixed_len<crypto::aes::iv_len>(iv.data());
         ensure(crypto::aes::encrypt(enc_context.get(), key, iv, data, dest));
         payload = encrypted;
     } break;
     case EncMethod::C20P1305: {
         const auto data = net::BytesRef{buf.data() + 1, size_t(len)};
         encrypted.resize(1 /*pt*/ + crypto::c20p1305::iv_len + crypto::c20p1305::calc_encryption_buffer_size(data.size()));
-        const auto iv   = net::BytesRef(std::span(encrypted).subspan(1, crypto::c20p1305::iv_len));
-        const auto dest = net::BytesRef(std::span(encrypted).subspan(1 + crypto::c20p1305::iv_len));
-        random_engine.random_fill_fixed_len<crypto::c20p1305::iv_len>((std::byte*)iv.data());
+        const auto iv   = crypto::MutBytesRef(std::span(encrypted).subspan(1, crypto::c20p1305::iv_len));
+        const auto dest = crypto::MutBytesRef(std::span(encrypted).subspan(1 + crypto::c20p1305::iv_len));
+        random_engine.random_fill_fixed_len<crypto::c20p1305::iv_len>(iv.data());
         ensure(crypto::c20p1305::encrypt(enc_context.get(), key, iv, data, dest));
         payload = encrypted;
     } break;
@@ -201,19 +188,22 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
     auto server_params_received = coop::SingleEvent();
     auto signaling_ready        = coop::SingleEvent();
 
-    parser.send_data = [&](net::BytesRef data) -> coop::Async<bool> {
-        return backend->send(data);
+    parser.send_data = [&](PrependableBuffer buffer) -> coop::Async<bool> {
+        return backend->send(std::move(buffer));
     };
-    parser.callbacks.by_type[proto::StartSignaling::pt] = [this, &signaling_ready](net::Header header, net::BytesRef /*payload*/) -> coop::Async<bool> {
+    parser.callbacks.by_type[proto::StartSignaling::pt] = [this, &signaling_ready](net::Header header, PrependableBuffer /*buffer*/) -> coop::Async<bool> {
         signaling_ready.notify();
-        return parser.send_packet(proto::Success(), header.id);
+        return parser.send_packet(proto::Success{}, header.id);
     };
-    parser.callbacks.by_type[proto::ServerParameters::pt] = [this, &server_params_received](net::Header header, net::BytesRef payload) -> coop::Async<bool> {
-        co_unwrap_v_mut(request, (serde::load<net::BinaryFormat, proto::ServerParameters>(payload)));
+    parser.callbacks.by_type[proto::Signaling::pt] = [this](net::Header /*header*/, PrependableBuffer buffer) -> coop::Async<bool> {
+        return p2p.push_signaling_data(std::move(buffer));
+    };
+    parser.callbacks.by_type[proto::ServerParameters::pt] = [this, &server_params_received](net::Header header, PrependableBuffer buffer) -> coop::Async<bool> {
+        co_unwrap_v_mut(request, (serde::load<net::BinaryFormat, proto::ServerParameters>(buffer.body())));
         args.enc = request.enc;
         args.tap = request.tap;
         server_params_received.notify();
-        co_ensure_v(co_await parser.send_packet(proto::Success(), header.id));
+        co_ensure_v(co_await parser.send_packet(proto::Success{}, header.id));
         co_return true;
     };
 
@@ -227,14 +217,11 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
         backend.reset(impl);
     }
     backend->on_closed   = []() { std::quick_exit(1); };
-    backend->on_received = [this](net::BytesRef data) -> coop::Async<void> {
-        const auto parsed = parser.parse_received(data);
-        if(!parsed) {
-            co_return;
-        }
-        const auto& [header, payload] = *parsed;
-        if(!co_await handle_parsed(header, payload) && header.type != proto::Error::pt) {
-            co_await parser.send_packet(proto::Error(), header.id);
+    backend->on_received = [this](PrependableBuffer buffer) -> coop::Async<void> {
+        coop_unwrap(parsed, net::split_header(buffer.body()));
+        const auto [header, _] = parsed;
+        if(!co_await parser.callbacks.invoke(header, std::move(buffer)) && header.type != proto::Error::pt) {
+            co_await parser.send_packet(proto::Error{}, header.id);
         }
     };
 
@@ -299,8 +286,8 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
     // setup p2p
     p2p.on_received      = [this](net::BytesRef data) { handle_datagram(data); };
     p2p.on_disconnected  = []() { std::quick_exit(1); };
-    p2p.parser.send_data = [this](net::BytesRef data) -> coop::Async<bool> {
-        return parser.send_packet(proto::Signaling::pt, data.data(), data.size());
+    p2p.parser.send_data = [this](PrependableBuffer buffer) -> coop::Async<bool> {
+        return parser.send_packet(proto::Signaling::pt, std::move(buffer));
     };
     coop_ensure(co_await p2p.connect({
         .start_backend = [&] -> coop::Async<bool> {
@@ -315,7 +302,7 @@ auto ShortWire::connect(coop::TaskInjector& injector) -> coop::Async<bool> {
     std::println("connected");
 
     // backend is no longer used
-    parser.send_data = [&](net::BytesRef) -> coop::Async<bool> {
+    parser.send_data = [&](PrependableBuffer) -> coop::Async<bool> {
         co_bail_v("no more data expected");
     };
     backend->on_closed = [] {};
